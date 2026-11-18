@@ -136,7 +136,7 @@ final class KeyboardInputView: UIView, UIKeyInput {
             ("⌃", HID.control, true), ("⌥", HID.option, true), ("⌘", HID.command, true), ("⇧", HID.shift, true),
             ("←", HID.left, false), ("↑", HID.up, false), ("↓", HID.down, false), ("→", HID.right, false),
         ]
-        var buttons: [UIView] = keys.map { title, usage, isModifier in
+        let buttons: [UIView] = keys.map { title, usage, isModifier in
             var config = UIButton.Configuration.gray()
             config.title = title
             config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
@@ -150,24 +150,41 @@ final class KeyboardInputView: UIView, UIKeyInput {
                 }
             })
             if isModifier { modifierButtons[usage] = button }
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
             return button
         }
-        var hide = UIButton.Configuration.plain()
-        hide.image = UIImage(systemName: "keyboard.chevron.compact.down")
-        buttons.append(UIButton(configuration: hide, primaryAction: UIAction { [weak self] _ in
+        var hideConfig = UIButton.Configuration.plain()
+        hideConfig.image = UIImage(systemName: "keyboard.chevron.compact.down")
+        let hide = UIButton(configuration: hideConfig, primaryAction: UIAction { [weak self] _ in
             _ = self?.resignFirstResponder()
-        }))
+        })
+        hide.translatesAutoresizingMaskIntoConstraints = false
         let stack = UIStackView(arrangedSubviews: buttons)
         stack.axis = .horizontal
         stack.distribution = .fillEqually
-        stack.spacing = 4
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(stack)
+        // Keys scroll sideways when they don't fit, and spread out when they do; the hide
+        // button stays put.
+        let scroller = UIScrollView()
+        scroller.showsHorizontalScrollIndicator = false
+        scroller.translatesAutoresizingMaskIntoConstraints = false
+        scroller.addSubview(stack)
+        bar.addSubview(scroller)
+        bar.addSubview(hide)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: bar.layoutMarginsGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: bar.layoutMarginsGuide.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
-            stack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
+            stack.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroller.contentLayoutGuide.bottomAnchor),
+            stack.heightAnchor.constraint(equalTo: scroller.frameLayoutGuide.heightAnchor),
+            stack.widthAnchor.constraint(greaterThanOrEqualTo: scroller.frameLayoutGuide.widthAnchor),
+            scroller.leadingAnchor.constraint(equalTo: bar.layoutMarginsGuide.leadingAnchor),
+            scroller.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+            scroller.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
+            hide.leadingAnchor.constraint(equalTo: scroller.trailingAnchor, constant: 4),
+            hide.trailingAnchor.constraint(equalTo: bar.layoutMarginsGuide.trailingAnchor),
+            hide.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
             bar.heightAnchor.constraint(equalToConstant: 48),
         ])
         return bar

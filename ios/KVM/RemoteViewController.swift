@@ -11,9 +11,10 @@ import UIKit
 /// two-finger drag scrolls (with momentum), touch and hold then drag drags.
 /// Touch gestures: tap clicks where you tap, drag drags from there, touch and hold
 /// right-clicks, two-finger drag scrolls.
-/// Both, and an iPad trackpad: pinch zooms and two fingers turning rotate (real trackpad
-/// gestures on the computer). On the screen, three fingers swiping up show Mission Control,
-/// down App Exposé, left and right switch Spaces.
+/// Both, with the screen shown: pinch zooms the picture, and two-finger drag pans it while
+/// zoomed. Without the screen, and on an iPad trackpad, pinch zooms and two fingers turning
+/// rotate (real trackpad gestures on the computer). On the screen, three fingers swiping up
+/// show Mission Control, down App Exposé, left and right switch Spaces.
 /// An iPad trackpad or mouse moves the computer's pointer by raw deltas while iPadOS locks
 /// the pointer to the app; otherwise the iPad's pointer points at the picture directly.
 ///
@@ -57,6 +58,18 @@ final class RemoteViewController: UIViewController {
     /// A pinch or rotation happened during this two-finger touch: no scroll momentum after.
     private var transformed = false
     private var together: [UIGestureRecognizer] = []
+    /// The picture zoomed in on this device: scale and offset (view points) from centered.
+    private var zoom: CGFloat = 1
+    private var zoomOffset = CGPoint.zero
+    /// A finger pinch is zooming the picture rather than the computer.
+    private var zooming = false
+    private var lastCentroid = CGPoint.zero
+    private var pinchTouches = 0
+    /// How much of the view the on-screen keyboard covers, from the bottom.
+    private var keyboardHeight: CGFloat = 0
+    private var laidOutSize = CGSize.zero
+    /// The zoom the current stream's resolution was asked for.
+    private var streamZoom: CGFloat = 1
 
     // Hardware keyboard and mouse
     private var heldKeys: Set<UInt16> = []
@@ -84,8 +97,6 @@ final class RemoteViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        videoView.frame = view.bounds
-        videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(videoView)
 
         status.textColor = UIColor(white: 0.7, alpha: 1)
@@ -127,6 +138,25 @@ final class RemoteViewController: UIViewController {
         }.store(in: &cancellables)
         model.$displays.receive(on: RunLoop.main).sink { [weak self] _ in self?.updateDisplayMenu() }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
+            .merge(with: NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification))
+            .sink { [weak self] note in self?.keyboardMoved(note) }
+            .store(in: &cancellables)
+    }
+
+    /// The picture moves up out of the keyboard's way, along with it.
+    private func keyboardMoved(_ note: Notification) {
+        guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let screen = view.window?.screen else { return }
+        let frame = view.convert(end, from: screen.coordinateSpace)
+        // Hidden, or floating on an iPad (not across the bottom): nothing to avoid.
+        let docked = note.name != UIResponder.keyboardWillHideNotification && frame.maxY >= view.bounds.maxY - 1
+        let height = docked ? max(view.bounds.maxY - frame.minY, 0) : 0
+        guard height != keyboardHeight else { return }
+        keyboardHeight = height
+        let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        view.setNeedsLayout()
+        UIView.animate(withDuration: duration) { self.view.layoutIfNeeded() }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -150,6 +180,15 @@ final class RemoteViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Laid out by bounds and center, which a zoom transform leaves alone; above the
+        // on-screen keyboard, so it doesn't cover the picture.
+        let area = CGRect(x: 0, y: 0, width: view.bounds.width, height: max(view.bounds.height - keyboardHeight, 1))
+        if videoView.bounds.size != area.size {
+            videoView.bounds = CGRect(origin: .zero, size: area.size)
+            if view.bounds.size != laidOutSize { resetZoom() } else { setZoom(zoom, offset: zoomOffset) }
+            laidOutSize = view.bounds.size
+        }
+        videoView.center = CGPoint(x: area.midX, y: area.midY)
         // Ask for a stream matching the new shape after a rotation, not for every pixel.
         guard screenOn, let last = requestedSize else { return }
         let now = pixelSize
@@ -179,7 +218,10 @@ final class RemoteViewController: UIViewController {
 
     private func startVideo() {
         requestedSize = pixelSize
-        model.view(VideoQuality.auto.params(maxSize: pixelSize)) { [weak self] data in
+        // Zoomed in, more pixels than the screen has keep the picture sharp (the computer
+        // sends at most its display's own resolution).
+        let size = CGSize(width: pixelSize.width * streamZoom, height: pixelSize.height * streamZoom)
+        model.view(VideoQuality.auto.params(maxSize: size)) { [weak self] data in
             DispatchQueue.main.async { self?.enqueue(data) }
         }
     }
@@ -190,6 +232,32 @@ final class RemoteViewController: UIViewController {
         frames.reset()
         videoView.renderer.flush(removingDisplayedImage: true, completionHandler: nil)
         videoView.videoSize = .zero
+        resetZoom()
+    }
+
+    /// Zoom the picture to `scale`, shifted by `offset`, keeping the screen covered.
+    private func setZoom(_ scale: CGFloat, offset: CGPoint) {
+        let z = min(max(scale, 1), 5)
+        let r = videoView.pictureRect
+        let maxX = max(0, (r.width * z - videoView.bounds.width) / 2)
+        let maxY = max(0, (r.height * z - videoView.bounds.height) / 2)
+        zoom = z
+        zoomOffset = CGPoint(x: min(max(offset.x, -maxX), maxX), y: min(max(offset.y, -maxY), maxY))
+        videoView.transform = CGAffineTransform(translationX: zoomOffset.x, y: zoomOffset.y).scaledBy(x: z, y: z)
+    }
+
+    /// Back to the whole picture; the next stream request is for the screen's size again.
+    private func resetZoom() {
+        zooming = false
+        streamZoom = 1
+        setZoom(1, offset: .zero)
+    }
+
+    /// After a pinch: ask for a stream to match the zoom, when it changed enough to matter.
+    private func updateStreamZoom() {
+        guard abs(zoom / streamZoom - 1) > 0.15 || (zoom == 1 && streamZoom != 1) else { return }
+        streamZoom = zoom
+        if screenOn, requestedSize != nil { startVideo() }
     }
 
     private func enqueue(_ frame: Data) {
@@ -204,7 +272,15 @@ final class RemoteViewController: UIViewController {
         guard let (sample, newFormat) = frames.sample(from: frame), let format = frames.format else { return }
         if newFormat {
             let dims = CMVideoFormatDescriptionGetDimensions(format)
-            videoView.videoSize = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+            let size = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+            // Another display or shape, not just a sharper stream: start from the whole picture.
+            let old = videoView.videoSize
+            if old.height == 0 || abs(size.width / size.height - old.width / old.height) > 0.01 {
+                let wasZoomed = streamZoom != 1
+                resetZoom()
+                if wasZoomed { startVideo() }
+            }
+            videoView.videoSize = size
             updateStatus()
         }
         renderer.enqueue(sample)
@@ -485,13 +561,24 @@ final class RemoteViewController: UIViewController {
 
     @objc private func scroll(_ g: UIPanGestureRecognizer) {
         if g.state == .began { transformed = false }
+        let fingers = !g.allowedTouchTypes.isEmpty
+        // Zoomed in, two fingers pan the picture instead of scrolling the computer.
+        if fingers, zooming || zoom > 1 {
+            transformed = true
+            if !zooming {
+                let t = g.translation(in: view)
+                setZoom(zoom, offset: CGPoint(x: zoomOffset.x + t.x, y: zoomOffset.y + t.y))
+            }
+            g.setTranslation(.zero, in: view)
+            return
+        }
         switch g.state {
         case .began, .changed:
             if !magnifying, !rotating { scroll(by: g.translation(in: videoView)) }
             g.setTranslation(.zero, in: videoView)
         case .ended:
             // Trackpads and wheels bring their own momentum.
-            if !g.allowedTouchTypes.isEmpty, !transformed { startMomentum(g.velocity(in: videoView)) }
+            if fingers, !transformed { startMomentum(g.velocity(in: videoView)) }
         default:
             break
         }
@@ -528,6 +615,20 @@ final class RemoteViewController: UIViewController {
     }
 
     @objc private func pinch(_ g: UIPinchGestureRecognizer) {
+        // Fingers on the picture zoom it here; a trackpad pinch (no touches) goes to the computer.
+        if g.state == .began, screenOn, videoView.videoSize != .zero, g.numberOfTouches >= 2 {
+            zooming = true
+            transformed = true
+            stopMomentum()
+            lastScale = g.scale
+            lastCentroid = g.location(in: view)
+            pinchTouches = g.numberOfTouches
+            return
+        }
+        if zooming {
+            zoomPicture(g)
+            return
+        }
         switch g.state {
         case .began:
             lastScale = g.scale
@@ -550,7 +651,34 @@ final class RemoteViewController: UIViewController {
         }
     }
 
+    /// Zoom about the fingers, which also pan the picture as they move.
+    private func zoomPicture(_ g: UIPinchGestureRecognizer) {
+        guard g.state == .changed else {
+            zooming = false
+            if zoom < 1.05 { UIView.animate(withDuration: 0.2) { self.setZoom(1, offset: .zero) } }
+            updateStreamZoom()
+            return
+        }
+        let c = g.location(in: view)
+        // A finger lifted or came back: the centroid jumps, so start over from here.
+        guard g.numberOfTouches == pinchTouches else {
+            pinchTouches = g.numberOfTouches
+            lastScale = g.scale
+            lastCentroid = c
+            return
+        }
+        let k = min(max(zoom * g.scale / lastScale, 1), 5) / zoom
+        // Keep the point under the fingers in place, then follow them.
+        let d = CGPoint(x: lastCentroid.x - videoView.center.x, y: lastCentroid.y - videoView.center.y)
+        let offset = CGPoint(x: d.x - (d.x - zoomOffset.x) * k + c.x - lastCentroid.x,
+                             y: d.y - (d.y - zoomOffset.y) * k + c.y - lastCentroid.y)
+        setZoom(zoom * k, offset: offset)
+        lastScale = g.scale
+        lastCentroid = c
+    }
+
     @objc private func rotation(_ g: UIRotationGestureRecognizer) {
+        if zooming, !rotating { return }
         switch g.state {
         case .began:
             lastRotation = g.rotation
