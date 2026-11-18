@@ -1,0 +1,13 @@
+[package]
+name = "kvm-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+kvm-core = { path = "../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

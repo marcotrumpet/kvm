@@ -1,0 +1,9 @@
+target/
+kvm-state/
+.DS_Store
+dist/
+.build/
+.swiftpm/
+*.key
+*.p12
+*.pem
