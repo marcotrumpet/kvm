@@ -26,6 +26,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Clipboard contents larger than this are not shared (send big things as files).
 pub const MAX_CLIPBOARD_BYTES: usize = 32 * 1024 * 1024;
 const CLIPBOARD_PRIORITY: i32 = -5;
+/// Longest text typed in one go (it travels in a control frame).
+pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 
 /// Everything the platform layer needs to react to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +48,10 @@ pub enum Event {
     Consumer { usage: u16, down: bool },
     /// Mouse wheel notches.
     Wheel { dx: i16, dy: i16 },
+    /// Text to type (layout-independent).
+    Text(String),
+    /// A pinch or rotation; see [`Control::Gesture`].
+    Gesture { kind: u8, phase: u8, value: i32 },
     /// The peer wants to see this screen: start capturing and send frames.
     VideoRequested(VideoParams),
     /// Stop capturing (the viewer closed, or the session ended).
@@ -381,6 +387,22 @@ impl Session {
         }
     }
 
+    /// Types `text` on the peer, while controlling it.
+    pub fn send_text(&self, text: String) {
+        if text.len() > MAX_TEXT_BYTES {
+            warn!("text too long to type ({} bytes)", text.len());
+        } else if self.is_controlling() && !text.is_empty() {
+            self.shared.send(Control::Text(text));
+        }
+    }
+
+    /// A pinch or rotation on the peer, while controlling it; see [`Control::Gesture`].
+    pub fn send_gesture(&self, kind: u8, phase: u8, value: i32) {
+        if self.is_controlling() {
+            self.shared.send(Control::Gesture { kind, phase, value });
+        }
+    }
+
     /// Sends an extra ping; the answer arrives as [`Event::Latency`].
     pub fn ping(&self) {
         send_ping(&self.shared);
@@ -520,6 +542,16 @@ async fn control_loop(shared: Arc<Shared>, mut recv: RecvStream) {
                 rx.catch_up(motion, events);
                 if rx.controlled {
                     let _ = events.send(Event::Wheel { dx, dy });
+                }
+            }
+            Control::Text(text) => {
+                if shared.rx.lock().unwrap().controlled {
+                    let _ = events.send(Event::Text(text));
+                }
+            }
+            Control::Gesture { kind, phase, value } => {
+                if shared.rx.lock().unwrap().controlled {
+                    let _ = events.send(Event::Gesture { kind, phase, value });
                 }
             }
             Control::Hello { .. } => warn!("unexpected hello mid-session"),

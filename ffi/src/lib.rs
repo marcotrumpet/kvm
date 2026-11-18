@@ -2,7 +2,8 @@
 //! The matching header is `ffi/include/kvm.h`; keep the two in sync.
 
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent, VideoParams};
@@ -33,6 +34,8 @@ pub const KVM_EV_CLIPBOARD: u32 = 30;
 pub const KVM_EV_DISPLAY_LIST: u32 = 36;
 pub const KVM_EV_CONFINE: u32 = 37;
 pub const KVM_EV_EDGE_EXIT: u32 = 38;
+pub const KVM_EV_TEXT: u32 = 39;
+pub const KVM_EV_GESTURE: u32 = 40;
 pub const KVM_EV_FILE_SEND_PROGRESS: u32 = 31;
 pub const KVM_EV_FILE_SEND_DONE: u32 = 32;
 pub const KVM_EV_FILE_RECEIVE_PROGRESS: u32 = 33;
@@ -61,8 +64,10 @@ pub struct KvmEvent {
 pub type KvmEventCallback = extern "C" fn(ctx: *mut c_void, event: *const KvmEvent);
 
 pub struct KvmNode {
-    rt: Runtime,
+    rt: Arc<Runtime>,
     node: Node,
+    /// A second handle on the same node (`kvm_node_remotes`): it owns only its link.
+    secondary: bool,
     link: Mutex<Option<Link>>,
     dispatcher: Mutex<Option<JoinHandle<()>>>,
     watcher: Mutex<Option<JoinHandle<()>>>,
@@ -138,8 +143,9 @@ pub unsafe extern "C" fn kvm_node_start(
     };
     match rt.block_on(Node::bind(state_dir.as_ref(), name)) {
         Ok(node) => Box::into_raw(Box::new(KvmNode {
-            rt,
+            rt: Arc::new(rt),
             node,
+            secondary: false,
             link: Mutex::new(None),
             dispatcher: Mutex::new(None),
             watcher: Mutex::new(None),
@@ -167,14 +173,76 @@ pub unsafe extern "C" fn kvm_node_set_peer(
     callback: KvmEventCallback,
     ctx: *mut c_void,
 ) -> bool {
+    let Some(peer) = (unsafe { peer_arg(peer) }) else { return false };
     let node = unsafe { &*node };
-    let Some(peer) = (unsafe { str_arg(peer) }).and_then(|p| p.trim().parse::<EndpointId>().ok())
-    else {
-        return false;
-    };
+    start_link(node, callback, ctx, |n| n.link(peer));
+    true
+}
+
+/// Like `kvm_node_set_peer`, but this side always dials: a remote control (phone, tablet)
+/// connecting to a computer that trusts it through `kvm_node_set_remotes`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_node_dial_peer(
+    node: *const KvmNode,
+    peer: *const c_char,
+    callback: KvmEventCallback,
+    ctx: *mut c_void,
+) -> bool {
+    let Some(peer) = (unsafe { peer_arg(peer) }) else { return false };
+    let node = unsafe { &*node };
+    start_link(node, callback, ctx, |n| n.dial(peer));
+    true
+}
+
+/// A second handle on `node` for the link to remote controls (`kvm_node_set_remotes`). Every
+/// per-link function works on it; free it with `kvm_node_free` before freeing `node`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_node_remotes(node: *const KvmNode) -> *mut KvmNode {
+    let node = unsafe { &*node };
+    Box::into_raw(Box::new(KvmNode {
+        rt: node.rt.clone(),
+        node: node.node.clone(),
+        secondary: true,
+        link: Mutex::new(None),
+        dispatcher: Mutex::new(None),
+        watcher: Mutex::new(None),
+    }))
+}
+
+/// Accepts sessions from these remote controls (ids, `count` of them), one at a time, next
+/// to the paired peer's link; replaces the previous set. `count` 0 just stops. Call it on a
+/// `kvm_node_remotes` handle. False if an id is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_node_set_remotes(
+    node: *const KvmNode,
+    ids: *const *const c_char,
+    count: usize,
+    callback: KvmEventCallback,
+    ctx: *mut c_void,
+) -> bool {
+    let mut allowed = HashSet::new();
+    for i in 0..count {
+        let Some(id) = (unsafe { peer_arg(*ids.add(i)) }) else { return false };
+        allowed.insert(id);
+    }
+    let node = unsafe { &*node };
+    if allowed.is_empty() {
+        unsafe { kvm_node_clear_peer(node) };
+    } else {
+        start_link(node, callback, ctx, |n| n.accept_remotes(allowed));
+    }
+    true
+}
+
+fn start_link(
+    node: &KvmNode,
+    callback: KvmEventCallback,
+    ctx: *mut c_void,
+    make: impl FnOnce(&Node) -> (Link, tokio::sync::mpsc::UnboundedReceiver<Event>),
+) {
     unsafe { kvm_node_clear_peer(node) };
     let _guard = node.rt.enter();
-    let (link, mut events) = node.node.link(peer);
+    let (link, mut events) = make(&node.node);
     let ctx = CallbackCtx(ctx);
     let dispatcher = node.rt.spawn(async move {
         let ctx = ctx;
@@ -184,7 +252,6 @@ pub unsafe extern "C" fn kvm_node_set_peer(
     });
     *node.link.lock().unwrap() = Some(link);
     *node.dispatcher.lock().unwrap() = Some(dispatcher);
-    true
 }
 
 /// Drops the link. No callbacks run after this returns.
@@ -203,8 +270,9 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
     let mut data: &[u8] = &[];
     let mut id = None;
     let (kind, a, b, flag) = match event {
-        Event::Connected { name, .. } => {
+        Event::Connected { name, peer } => {
             text = CString::new(name.as_str()).ok();
+            id = CString::new(peer.to_string()).ok();
             (KVM_EV_CONNECTED, 0, 0, false)
         }
         Event::Path { direct, rtt } => (KVM_EV_PATH, rtt.as_micros() as i64, 0, *direct),
@@ -217,6 +285,13 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
         Event::Button { button, down } => (KVM_EV_BUTTON, *button as i64, 0, *down),
         Event::Consumer { usage, down } => (KVM_EV_CONSUMER, *usage as i64, 0, *down),
         Event::Wheel { dx, dy } => (KVM_EV_WHEEL, *dx as i64, *dy as i64, false),
+        Event::Gesture { kind, phase, value } => {
+            (KVM_EV_GESTURE, ((*kind as i64) << 8) | *phase as i64, *value as i64, false)
+        }
+        Event::Text(t) => {
+            text = CString::new(t.as_str()).ok();
+            (KVM_EV_TEXT, 0, 0, false)
+        }
         Event::VideoRequested(p) => (
             KVM_EV_VIDEO_REQUESTED,
             ((p.display as i64) << 32) | ((p.max_width as i64) << 16) | p.max_height as i64,
@@ -312,11 +387,12 @@ fn dispatch_node(event: &NodeEvent, callback: KvmEventCallback, ctx: *mut c_void
     let (kind, id, text, a, flag) = match event {
         NodeEvent::Discovered { id, name } => (KVM_EV_DISCOVERED, id, Some(name.clone()), 0, false),
         NodeEvent::Expired { id } => (KVM_EV_EXPIRED, id, None, 0, false),
-        NodeEvent::PairRequest { id, name, code } => {
-            (KVM_EV_PAIR_REQUEST, id, Some(name.clone()), code.parse().unwrap_or(0), false)
+        NodeEvent::PairRequest { id, name, code, remote } => {
+            (KVM_EV_PAIR_REQUEST, id, Some(name.clone()), code.parse().unwrap_or(0), *remote)
         }
         NodeEvent::PairResult { id, name, accepted, error } => {
-            (KVM_EV_PAIR_RESULT, id, Some(error.clone().unwrap_or_else(|| name.clone())), 0, *accepted)
+            let failed = error.is_some() as i64;
+            (KVM_EV_PAIR_RESULT, id, Some(error.clone().unwrap_or_else(|| name.clone())), failed, *accepted)
         }
     };
     let id = CString::new(id.to_string()).ok();
@@ -350,10 +426,21 @@ pub unsafe extern "C" fn kvm_set_discoverable(node: *const KvmNode, on: bool) {
 /// Asks `peer` to pair; the answer arrives as KVM_EV_PAIR_RESULT. False if `peer` is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kvm_pair_request(node: *const KvmNode, peer: *const c_char) -> bool {
+    unsafe { pair_request(node, peer, false) }
+}
+
+/// Like `kvm_pair_request`, as a remote control: the computer trusts this device next to
+/// its paired computer rather than instead of it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_pair_request_remote(node: *const KvmNode, peer: *const c_char) -> bool {
+    unsafe { pair_request(node, peer, true) }
+}
+
+unsafe fn pair_request(node: *const KvmNode, peer: *const c_char, remote: bool) -> bool {
     let node = unsafe { &*node };
     let Some(peer) = (unsafe { peer_arg(peer) }) else { return false };
     let _guard = node.rt.enter();
-    node.node.request_pairing(peer);
+    node.node.request_pairing(peer, remote);
     true
 }
 
@@ -554,6 +641,20 @@ pub unsafe extern "C" fn kvm_send_wheel(node: *const KvmNode, dx: i16, dy: i16) 
     with_link(node, |l| l.send_wheel(dx, dy))
 }
 
+/// While controlling: types `text` (UTF-8) on the peer, whatever its keyboard layout.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_send_text(node: *const KvmNode, text: *const c_char) {
+    let Some(text) = (unsafe { str_arg(text) }) else { return };
+    with_link(node, |l| l.send_text(text.to_string()))
+}
+
+/// While controlling: a pinch or rotation on the peer (kind 0 magnify, 1 rotate; phase 1
+/// began, 2 changed, 4 ended; value: magnification x 10000 or degrees x 100, increments).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_send_gesture(node: *const KvmNode, kind: u8, phase: u8, value: i32) {
+    with_link(node, |l| l.send_gesture(kind, phase, value))
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kvm_send_consumer(node: *const KvmNode, usage: u16, down: bool) {
     with_link(node, |l| l.send_consumer(usage, down))
@@ -578,10 +679,15 @@ pub unsafe extern "C" fn kvm_node_free(node: *mut KvmNode) {
     }
     unsafe { kvm_node_clear_peer(node) };
     let node = unsafe { Box::from_raw(node) };
+    if node.secondary {
+        return;
+    }
     if let Some(watcher) = node.watcher.lock().unwrap().take() {
         watcher.abort();
     }
     let KvmNode { rt, node, .. } = *node;
     rt.block_on(node.close());
-    rt.shutdown_timeout(Duration::from_secs(1));
+    if let Ok(rt) = Arc::try_unwrap(rt) {
+        rt.shutdown_timeout(Duration::from_secs(1));
+    }
 }

@@ -6,6 +6,7 @@ struct SettingsView: View {
     let myID: String
     @ObservedObject var state: AppState
     @ObservedObject var pairing: Pairing
+    @ObservedObject var remotes: RemoteState
     let saveHotkey: (Hotkey) -> Void
     /// Returns false if the helper install was cancelled or failed.
     let setPauseAwdl: (Bool) -> Bool
@@ -111,6 +112,33 @@ struct SettingsView: View {
                         Text(peerError).foregroundStyle(.red)
                     }
                 }
+            }
+
+            Section {
+                HStack(alignment: .top, spacing: 16) {
+                    if let qr = QRCode.image(pairing.pairingLink(myID: myID)) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 132, height: 132)
+                            .accessibilityLabel("Pairing code for KVM on iPhone or iPad")
+                    }
+                    Text("Scan this with the Camera or the KVM app on your iPhone or iPad to control this Mac from it. It's added next to the computer paired above, not instead of it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(remotes.paired.sorted(by: { $0.value.localizedStandardCompare($1.value) == .orderedAscending }), id: \.key) { id, name in
+                    LabeledContent(name) {
+                        HStack {
+                            if remotes.connectedID == id {
+                                Text("Connected").foregroundStyle(.secondary)
+                            }
+                            Button("Remove") { pairing.remotes.remove(id: id) }
+                        }
+                    }
+                }
+            } header: {
+                Text("iPhone and iPad")
             }
 
             Section("Switching") {

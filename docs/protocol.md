@@ -3,6 +3,10 @@
 One QUIC connection per peer pair (iroh, ALPN `kvm/1`). Both ends are authenticated by their
 Ed25519 endpoint id; only the paired id is accepted. The side with the smaller id dials.
 
+Remote controls (the iPhone/iPad app) are the exception: they always dial, and a computer
+accepts them on a second link next to the one with its paired peer, from any id in its list
+of paired remote controls, one session at a time. They only ever send input.
+
 ## Channels
 
 | Channel | Reliability | Carries |
@@ -23,7 +27,12 @@ datagrams, motion falls back to `Control::Motion` on the stream.
 
 `Hello{version,name}` (dialer first) · `Ping{nonce}`/`Pong{nonce}` · `Enter` · `Leave` ·
 `Key{code: HID usage, down, motion}` · `Button{button, down, motion}` ·
-`Consumer{usage: HID consumer-page usage, down}` (media and system keys) · `Motion`.
+`Consumer{usage: HID consumer-page usage, down}` (media and system keys) · `Motion` ·
+`Text(String)` (typed as-is whatever the receiver's keyboard layout, max 16 KiB: a phone's
+on-screen keyboard has no key positions to send; line breaks and tabs are typed as keys) ·
+`Gesture{kind, phase, value}` (pinch: magnification change x 10000, or rotation: degrees
+counterclockwise x 100; phases 1 began, 2 changed, 4 ended; replayed as real trackpad
+gesture events).
 
 The receiver only injects input between `Enter` and `Leave`, tracks what it holds down, and
 drops key-ups for keys it never pressed. `Leave` releases everything still held.
@@ -87,3 +96,14 @@ the cursor entered the picture) and `Confine{display}`. The controlled side then
 pointer on that display and, when it is pushed past an edge, answers `EdgeExit{edge,
 along}`; the controller returns control and puts its own cursor just outside the viewer
 at the matching spot. `Leave` lifts the confinement.
+
+## Pairing
+
+ALPN `kvm-pair/1`, one bi-directional stream: `Pair::Request{name}` or, from a remote control,
+`Pair::RequestRemote{name}`; answered by `Pair::Reply{accepted, name}`. Only machines in
+pairing mode (KVM Settings open) ask their user; others decline. Both show a six-digit code
+derived from the two ids. A remote control is added to the computer's list of remote
+controls instead of replacing its paired peer. The Mac's Settings show a QR code with
+`kvm://pair?id=<id>&name=<name>`, which the iOS app (or the Camera) opens to request pairing.
+iOS has no mDNS (it needs a multicast entitlement), so remote controls reach computers by id
+through iroh's DNS address lookup and relays, then hole-punch to a direct path.

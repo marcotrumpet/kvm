@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- kvm://pair?id=…&name=… is what the Mac's pairing QR code holds, so scanning it
+         with the Camera opens this app. The rest of Info.plist is generated (project.pbxproj). -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.marcogaletta.kvm.pair</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>kvm</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

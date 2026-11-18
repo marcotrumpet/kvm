@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"kvm/1";
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 12;
 
 /// Upper bound for a single control frame. Bulk data (clipboard) uses its own streams.
 const MAX_FRAME_LEN: usize = 64 * 1024;
@@ -71,7 +71,21 @@ pub enum Control {
     /// Controlled side to controller: the pointer was pushed past an edge of the confining
     /// display (0 left, 1 right, 2 top, 3 bottom), `along` it at a fraction 0..=65535.
     EdgeExit { edge: u8, along: u16 },
+    /// Text to type as-is, whatever the receiver's keyboard layout (from a phone's
+    /// on-screen keyboard, which has no key positions to send).
+    Text(String),
+    /// A trackpad gesture (from a phone's touch screen or a tablet's trackpad): `kind` is
+    /// `GESTURE_MAGNIFY` (value: magnification change x 10000) or `GESTURE_ROTATE` (value:
+    /// degrees counterclockwise x 100); `phase` is `PHASE_BEGAN`, `PHASE_CHANGED` or
+    /// `PHASE_ENDED`. Values are increments, like macOS's own gesture events.
+    Gesture { kind: u8, phase: u8, value: i32 },
 }
+
+pub const GESTURE_MAGNIFY: u8 = 0;
+pub const GESTURE_ROTATE: u8 = 1;
+pub const PHASE_BEGAN: u8 = 1;
+pub const PHASE_CHANGED: u8 = 2;
+pub const PHASE_ENDED: u8 = 4;
 
 pub fn encode_datagram(d: &Datagram) -> Vec<u8> {
     postcard::to_stdvec(d).expect("datagram serialization is infallible")
@@ -127,6 +141,9 @@ pub const PAIR_ALPN: &[u8] = b"kvm-pair/1";
 pub enum Pair {
     Request { name: String },
     Reply { accepted: bool, name: String },
+    /// Like `Request`, from a remote control (phone, tablet): it only ever controls, and is
+    /// trusted in addition to the paired computer instead of replacing it.
+    RequestRemote { name: String },
 }
 
 /// Six digits both machines show while pairing, derived from both ids (FNV-1a over the

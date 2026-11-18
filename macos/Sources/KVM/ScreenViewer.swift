@@ -8,7 +8,8 @@ import CoreMedia
 final class ScreenViewer: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let view = VideoView()
-    private var format: CMVideoFormatDescription?
+    private var frames = VideoFrames()
+    private var format: CMVideoFormatDescription? { frames.format }
     private var sized = false
     /// Main thread.
     var onClose: (() -> Void)?
@@ -71,7 +72,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
             self.window = window
             statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateStats() }
             sized = false
-            format = nil
+            frames.reset()
             view.status = "Waiting for the screen…"
         }
         window?.title = title
@@ -309,90 +310,22 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         if layer.status == .failed {
             Log.warn("video decode failed: \(String(describing: layer.error)), restarting stream")
             layer.flush()
-            format = nil
+            frames.reset()
             onDecodeFailure?()
             return
         }
-        guard let (format, avcc) = parse(frame, keyframe: keyframe) else { return }
-        guard let sample = makeSample(avcc, format: format) else { return }
+        guard let (sample, newFormat) = frames.sample(from: frame), let format else { return }
+        if newFormat {
+            // A new size (the host adapting quality) keeps the window as it is.
+            let dims = CMVideoFormatDescriptionGetDimensions(format)
+            view.videoSize = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        }
         layer.enqueue(sample)
         if view.status != nil { view.status = nil }
         if !sized {
             sizeWindow(to: format)
             onPictureMoved?() // the picture now exists (and has its size)
         }
-    }
-
-    /// Splits off (and on keyframes, updates) the H.264 parameter sets.
-    private func parse(_ frame: Data, keyframe: Bool) -> (CMVideoFormatDescription, Data)? {
-        let bytes = [UInt8](frame)
-        guard bytes.count >= 2 else { return nil }
-        let nalLength = Int32(bytes[0])
-        let count = Int(bytes[1])
-        var offset = 2
-        var sets: [[UInt8]] = []
-        for _ in 0..<count {
-            guard offset + 2 <= bytes.count else { return nil }
-            let len = Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
-            offset += 2
-            guard offset + len <= bytes.count else { return nil }
-            sets.append(Array(bytes[offset..<offset + len]))
-            offset += len
-        }
-        if !sets.isEmpty {
-            var newFormat: CMVideoFormatDescription?
-            let status = withPointers(sets) { pointers, sizes in
-                CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    allocator: nil, parameterSetCount: sets.count, parameterSetPointers: pointers,
-                    parameterSetSizes: sizes, nalUnitHeaderLength: nalLength, formatDescriptionOut: &newFormat)
-            }
-            if status == noErr, let newFormat {
-                // A new size (the host adapting quality) keeps the window as it is.
-                format = newFormat
-                let dims = CMVideoFormatDescriptionGetDimensions(newFormat)
-                view.videoSize = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
-            }
-        }
-        guard let format else { return nil } // not decodable until the first keyframe
-        return (format, Data(bytes[offset...]))
-    }
-
-    private func withPointers<R>(_ sets: [[UInt8]], _ body: (UnsafePointer<UnsafePointer<UInt8>>, UnsafePointer<Int>) -> R) -> R {
-        let buffers = sets.map { set -> UnsafeMutablePointer<UInt8> in
-            let p = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
-            p.initialize(from: set, count: set.count)
-            return p
-        }
-        defer { buffers.forEach { $0.deallocate() } }
-        let pointers = buffers.map { UnsafePointer($0) }
-        let sizes = sets.map(\.count)
-        return pointers.withUnsafeBufferPointer { p in
-            sizes.withUnsafeBufferPointer { s in body(p.baseAddress!, s.baseAddress!) }
-        }
-    }
-
-    private func makeSample(_ avcc: Data, format: CMVideoFormatDescription) -> CMSampleBuffer? {
-        var block: CMBlockBuffer?
-        guard CMBlockBufferCreateWithMemoryBlock(
-            allocator: nil, memoryBlock: nil, blockLength: avcc.count, blockAllocator: nil,
-            customBlockSource: nil, offsetToData: 0, dataLength: avcc.count, flags: 0,
-            blockBufferOut: &block) == noErr, let block else { return nil }
-        avcc.withUnsafeBytes { raw in
-            _ = CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: avcc.count)
-        }
-        var sample: CMSampleBuffer?
-        var size = avcc.count
-        guard CMSampleBufferCreateReady(
-            allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 1,
-            sampleTimingEntryCount: 0, sampleTimingArray: nil, sampleSizeEntryCount: 1,
-            sampleSizeArray: &size, sampleBufferOut: &sample) == noErr, let sample else { return nil }
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true),
-           CFArrayGetCount(attachments) > 0 {
-            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
-        }
-        return sample
     }
 
     /// First frame: size the window to the stream's aspect ratio, within the screen.

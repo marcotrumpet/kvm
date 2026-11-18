@@ -4,3 +4,9 @@ members = ["core", "ffi", "awdl-helper"]
 
 [profile.release]
 strip = true
+
+# libc only exposes some XNU networking items for macOS; netdev and netwatch use them on
+# iOS too. The copies in vendor/ are patched for iOS (marked "KVM patch"); drop them once fixed upstream.
+[patch.crates-io]
+netdev = { path = "vendor/netdev" }
+netwatch = { path = "vendor/netwatch" }

@@ -3,6 +3,7 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var controller: Controller!
+    private var remotes: RemoteHost!
     private var menu: StatusMenu!
     private let awdl = Awdl()
     private var pairing: Pairing!
@@ -32,10 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         Log.info("KVM \(version) started: accessibility=\(Permissions.accessibility) inputMonitoring=\(Permissions.inputMonitoring)")
+        Permissions.resetStaleGrants()
         controller = Controller(core: core)
+        remotes = RemoteHost(core: Core(remotesOf: core))
         menu = StatusMenu(controller: controller, awdl: awdl, openSettings: { [unowned self] in showSettings() })
         awdl.follow(controller.state)
-        pairing = Pairing(controller: controller)
+        pairing = Pairing(controller: controller, remotes: remotes)
 
         if let peer = Settings.peerID, !controller.setPeer(peer) {
             Settings.peerID = nil
@@ -48,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         awdl.stop()
+        remotes?.stop()
         controller?.returnToLocal(notifyPeer: true)
         controller?.core.clearPeer()
     }
@@ -74,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 myID: controller.core.id,
                 state: controller.state,
                 pairing: pairing,
+                remotes: remotes.state,
                 saveHotkey: { [unowned self] hotkey in
                     Settings.hotkey = hotkey
                     controller.capture.setHotkey(hotkey)

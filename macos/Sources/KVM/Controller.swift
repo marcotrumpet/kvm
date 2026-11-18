@@ -197,6 +197,10 @@ final class Controller {
             if mode.withLock({ $0 }) == .controlledByPeer { injector.wheel(dx: dx, dy: dy) }
         case .consumer(let usage, let down):
             if mode.withLock({ $0 }) == .controlledByPeer { injector.consumer(usage: usage, down: down) }
+        case .text(let text):
+            if mode.withLock({ $0 }) == .controlledByPeer { injector.type(text) }
+        case .gesture(let g):
+            if mode.withLock({ $0 }) == .controlledByPeer { injector.gesture(g) }
         case .entered:
             Log.info("peer took control (accessibility=\(Permissions.accessibility))")
             if !Permissions.accessibility {
@@ -256,7 +260,7 @@ final class Controller {
             if let value = publishValue {
                 DispatchQueue.main.async { self.state.latencyMs = value }
             }
-        case .connected(let name):
+        case .connected(let name, _):
             DispatchQueue.main.async {
                 self.state.connected = true
                 self.state.peerName = name

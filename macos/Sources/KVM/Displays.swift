@@ -1,14 +1,5 @@
 import AppKit
 
-/// One of this Mac's displays, as told to a viewer (see docs/protocol.md).
-struct DisplayInfo: Codable, Equatable {
-    let id: UInt32
-    let name: String
-    let width: Int
-    let height: Int
-    let main: Bool
-}
-
 enum Displays {
     /// Active displays, left to right.
     static func current() -> [DisplayInfo] {

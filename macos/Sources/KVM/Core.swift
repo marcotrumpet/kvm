@@ -3,7 +3,7 @@ import Foundation
 
 /// Events from the Rust core. Delivered in order on a background thread.
 enum CoreEvent {
-    case connected(name: String)
+    case connected(name: String, peer: String)
     case path(direct: Bool, rttMicros: Int64)
     case latency(micros: Int64)
     case entered
@@ -14,6 +14,9 @@ enum CoreEvent {
     case button(Int, down: Bool)
     case consumer(usage: UInt16, down: Bool)
     case wheel(dx: Int16, dy: Int16)
+    /// Text to type, whatever this machine's keyboard layout.
+    case text(String)
+    case gesture(Gesture)
     case videoRequested(VideoParams)
     case videoStopped
     case keyframeRequested
@@ -39,9 +42,11 @@ enum CoreEvent {
 enum MachineEvent {
     case discovered(id: String, name: String)
     case expired(id: String)
-    case pairRequest(id: String, name: String, code: String)
-    /// `detail` is the other machine's name, or the error if it failed.
-    case pairResult(id: String, accepted: Bool, detail: String)
+    /// `remote`: a phone or tablet asking to control this computer, trusted next to the
+    /// paired computer rather than replacing it.
+    case pairRequest(id: String, name: String, code: String, remote: Bool)
+    /// `detail` is the other machine's name, or the error if it `failed`.
+    case pairResult(id: String, accepted: Bool, detail: String, failed: Bool)
 }
 
 struct VideoParams: Equatable {
@@ -89,6 +94,31 @@ enum VideoQuality: String, CaseIterable {
     }
 }
 
+/// One of the host's displays, as told to a viewer (see docs/protocol.md).
+struct DisplayInfo: Codable, Equatable {
+    let id: UInt32
+    let name: String
+    let width: Int
+    let height: Int
+    let main: Bool
+}
+
+/// A pinch or rotation (see `kvm_send_gesture`).
+struct Gesture {
+    enum Kind: UInt8 {
+        case magnify = 0, rotate = 1
+    }
+
+    enum Phase: UInt8 {
+        case began = 1, changed = 2, ended = 4
+    }
+
+    let kind: Kind
+    let phase: Phase
+    /// Magnification change, or degrees counterclockwise; an increment.
+    let value: Double
+}
+
 struct CoreError: Error, CustomStringConvertible {
     let description: String
 }
@@ -96,6 +126,8 @@ struct CoreError: Error, CustomStringConvertible {
 /// Swift wrapper over the C ABI in ffi/include/kvm.h.
 final class Core {
     private let node: OpaquePointer
+    /// For a `remotesOf` handle: the node it shares, kept alive (and freed) after it.
+    private let parent: Core?
     let id: String
     /// Set before calling `setPeer`. Runs on the core's event thread.
     var onEvent: ((CoreEvent) -> Void)?
@@ -109,23 +141,49 @@ final class Core {
             throw CoreError(description: String(cString: err))
         }
         self.node = node
+        parent = nil
         var buf = [CChar](repeating: 0, count: 80)
         kvm_node_id(node, &buf, buf.count)
         id = String(cString: buf)
+    }
+
+    /// A second handle on `core`'s node for the link to remote controls (`setRemotes`). It
+    /// has the same id and every per-link method; `onEvent` gets that link's events.
+    init(remotesOf core: Core) {
+        node = kvm_node_remotes(core.node)
+        parent = core
+        id = core.id
     }
 
     deinit {
         kvm_node_free(node)
     }
 
+    private static let deliver: KvmEventCallback = { ctx, event in
+        guard let ctx, let event else { return }
+        let core = Unmanaged<Core>.fromOpaque(ctx).takeUnretainedValue()
+        core.onEvent?(CoreEvent(event.pointee))
+    }
+
     /// Starts the link to `peer`. Returns false if the id is malformed. Main thread only.
     func setPeer(_ peer: String) -> Bool {
-        let ctx = Unmanaged.passUnretained(self).toOpaque()
-        return kvm_node_set_peer(node, peer, { ctx, event in
-            guard let ctx, let event else { return }
-            let core = Unmanaged<Core>.fromOpaque(ctx).takeUnretainedValue()
-            core.onEvent?(CoreEvent(event.pointee))
-        }, ctx)
+        kvm_node_set_peer(node, peer, Core.deliver, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// Like `setPeer`, always dialing: how a remote control (phone, tablet) connects.
+    func dialPeer(_ peer: String) -> Bool {
+        kvm_node_dial_peer(node, peer, Core.deliver, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    /// On a `remotesOf` handle: accept these remote controls, one at a time (none: stop).
+    /// Returns false if an id is malformed. Main thread only.
+    func setRemotes(_ ids: [String]) -> Bool {
+        let strings = ids.map { strdup($0) }
+        defer { strings.forEach { free($0) } }
+        let pointers = strings.map { UnsafePointer($0) }
+        return pointers.withUnsafeBufferPointer {
+            kvm_node_set_remotes(node, $0.baseAddress, $0.count, Core.deliver, Unmanaged.passUnretained(self).toOpaque())
+        }
     }
 
     func clearPeer() {
@@ -144,7 +202,10 @@ final class Core {
     /// Pairing mode: visible to nearby computers and accepting pairing requests.
     func setDiscoverable(_ on: Bool) { kvm_set_discoverable(node, on) }
 
-    func requestPairing(_ peer: String) -> Bool { kvm_pair_request(node, peer) }
+    /// `remote`: ask as a remote control (see `MachineEvent.pairRequest`).
+    func requestPairing(_ peer: String, remote: Bool = false) -> Bool {
+        remote ? kvm_pair_request_remote(node, peer) : kvm_pair_request(node, peer)
+    }
     func respondPairing(_ peer: String, accept: Bool) -> Bool { kvm_pair_respond(node, peer, accept) }
 
     func pairingCode(_ peer: String) -> String? {
@@ -165,6 +226,12 @@ final class Core {
     func sendButton(_ button: Int, down: Bool) { kvm_send_button(node, UInt8(clamping: button), down) }
     func sendConsumer(usage: UInt16, down: Bool) { kvm_send_consumer(node, usage, down) }
     func sendWheel(dx: Int16, dy: Int16) { kvm_send_wheel(node, dx, dy) }
+    func sendText(_ text: String) { kvm_send_text(node, text) }
+
+    func sendGesture(_ g: Gesture) {
+        let scale = g.kind == .magnify ? 10_000.0 : 100.0
+        kvm_send_gesture(node, g.kind.rawValue, g.phase.rawValue, Int32(clamping: Int((g.value * scale).rounded())))
+    }
 
     func requestVideo(_ p: VideoParams) {
         kvm_video_request(node, UInt16(clamping: p.maxWidth), UInt16(clamping: p.maxHeight),
@@ -230,7 +297,7 @@ final class Core {
     }
 }
 
-/// Writes to the shared log file (~/Library/Logs/KVM/kvm.log).
+/// Writes to the shared log file (on macOS ~/Library/Logs/KVM/kvm.log).
 enum Log {
     static func info(_ message: String) { kvm_log(0, message) }
     static func warn(_ message: String) { kvm_log(1, message) }
@@ -240,7 +307,7 @@ private extension CoreEvent {
     init(_ e: KvmEvent) {
         let text = e.text.map { String(cString: $0) } ?? ""
         switch Int(e.kind) {
-        case KVM_EV_CONNECTED: self = .connected(name: text)
+        case KVM_EV_CONNECTED: self = .connected(name: text, peer: e.id.map { String(cString: $0) } ?? "")
         case KVM_EV_PATH: self = .path(direct: e.flag, rttMicros: e.a)
         case KVM_EV_LATENCY: self = .latency(micros: e.a)
         case KVM_EV_ENTERED: self = .entered
@@ -251,6 +318,12 @@ private extension CoreEvent {
         case KVM_EV_BUTTON: self = .button(Int(e.a), down: e.flag)
         case KVM_EV_CONSUMER: self = .consumer(usage: UInt16(truncatingIfNeeded: e.a), down: e.flag)
         case KVM_EV_WHEEL: self = .wheel(dx: Int16(truncatingIfNeeded: e.a), dy: Int16(truncatingIfNeeded: e.b))
+        case KVM_EV_TEXT: self = .text(text)
+        case KVM_EV_GESTURE:
+            let kind = Gesture.Kind(rawValue: UInt8(truncatingIfNeeded: e.a >> 8)) ?? .magnify
+            let phase = Gesture.Phase(rawValue: UInt8(truncatingIfNeeded: e.a)) ?? .changed
+            self = .gesture(Gesture(kind: kind, phase: phase,
+                                    value: Double(e.b) / (kind == .magnify ? 10_000 : 100)))
         case KVM_EV_VIDEO_REQUESTED:
             self = .videoRequested(VideoParams(
                 maxWidth: Int((e.a >> 16) & 0xFFFF), maxHeight: Int(e.a & 0xFFFF),
@@ -296,8 +369,9 @@ private extension MachineEvent {
         switch Int(e.kind) {
         case KVM_EV_DISCOVERED: self = .discovered(id: id, name: text)
         case KVM_EV_EXPIRED: self = .expired(id: id)
-        case KVM_EV_PAIR_REQUEST: self = .pairRequest(id: id, name: text, code: String(format: "%06lld", e.a))
-        case KVM_EV_PAIR_RESULT: self = .pairResult(id: id, accepted: e.flag, detail: text)
+        case KVM_EV_PAIR_REQUEST:
+            self = .pairRequest(id: id, name: text, code: String(format: "%06lld", e.a), remote: e.flag)
+        case KVM_EV_PAIR_RESULT: self = .pairResult(id: id, accepted: e.flag, detail: text, failed: e.a != 0)
         default: return nil
         }
     }

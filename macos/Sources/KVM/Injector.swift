@@ -140,6 +140,56 @@ final class Injector {
         postKey(vk: vk, down: down)
     }
 
+    /// Replays a pinch or rotation as the gesture events a trackpad produces (event type
+    /// 29, fields as macOS's private gesture events use them), at the pointer.
+    func gesture(_ g: Gesture) {
+        guard let e = CGEvent(source: source), let type = CGEventType(rawValue: 29) else { return }
+        e.type = type
+        e.location = position
+        e.setIntegerValueField(Injector.gestureSubtype, value: g.kind == .magnify ? 8 : 5)
+        e.setDoubleValueField(g.kind == .magnify ? Injector.gestureMagnification : Injector.gestureRotation, value: g.value)
+        e.setIntegerValueField(Injector.gesturePhase, value: Int64(g.phase.rawValue))
+        post(e)
+    }
+
+    private static let gestureSubtype = CGEventField(rawValue: 110)!
+    private static let gestureMagnification = CGEventField(rawValue: 113)!
+    private static let gestureRotation = CGEventField(rawValue: 114)!
+    private static let gesturePhase = CGEventField(rawValue: 132)!
+
+    /// Types `text` as Unicode, whatever this Mac's keyboard layout; line breaks and tabs
+    /// as the Return and Tab keys, which apps treat differently from typed characters.
+    func type(_ text: String) {
+        var chunk: [UniChar] = []
+        func flush() {
+            // Events carry at most 20 UTF-16 units of text.
+            for start in stride(from: 0, to: chunk.count, by: 20) {
+                let part = Array(chunk[start..<min(start + 20, chunk.count)])
+                for down in [true, false] {
+                    guard let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
+                    e.keyboardSetUnicodeString(stringLength: part.count, unicodeString: part)
+                    post(e)
+                }
+            }
+            chunk.removeAll()
+        }
+        for c in text {
+            let vk: UInt16? = switch c {
+            case "\n", "\r", "\r\n": 0x24
+            case "\t": 0x30
+            default: nil
+            }
+            if let vk {
+                flush()
+                postKey(vk: vk, down: true)
+                postKey(vk: vk, down: false)
+            } else {
+                chunk.append(contentsOf: c.utf16)
+            }
+        }
+        flush()
+    }
+
     private func postKey(vk: UInt16, down: Bool) {
         let repeated = down && keys.contains(vk)
         if down { keys.insert(vk) } else { keys.remove(vk) }

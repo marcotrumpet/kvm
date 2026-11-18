@@ -60,6 +60,9 @@ final class InputCapture {
         var hoverArmed = false
         /// Unforwardable keys already logged, so each is reported once.
         var loggedUnknown: Set<Int> = []
+        /// The three-finger swipe in progress: direction (1 horizontal, 2 vertical) and how far.
+        var swipeMotion: Int64 = 0
+        var swipeProgress = 0.0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -336,7 +339,76 @@ final class InputCapture {
                 }
             }
         default:
-            break // gestures: swallowed so they don't act on this Mac
+            // Gestures are swallowed so they don't act on this Mac; some go to the peer.
+            switch type.rawValue {
+            case 29: forwardGesture(event)
+            case 30: forwardSwipe(event)
+            default: break
+            }
         }
+    }
+
+    private static let gestureSubtype = CGEventField(rawValue: 110)!
+    private static let gestureMagnification = CGEventField(rawValue: 113)!
+    private static let gestureRotation = CGEventField(rawValue: 114)!
+    private static let swipeMotion = CGEventField(rawValue: 123)!
+    private static let swipeProgress = CGEventField(rawValue: 124)!
+    private static let gesturePhase = CGEventField(rawValue: 132)!
+
+    /// Pinch and rotation, replayed as the same gestures on the peer.
+    private func forwardGesture(_ e: CGEvent) {
+        let kind: Gesture.Kind
+        switch e.getIntegerValueField(InputCapture.gestureSubtype) {
+        case 8: kind = .magnify
+        case 5: kind = .rotate
+        default: return
+        }
+        let phase: Gesture.Phase = switch e.getIntegerValueField(InputCapture.gesturePhase) {
+        case 1: .began
+        case 4, 8: .ended // ended, cancelled
+        default: .changed
+        }
+        let field = kind == .magnify ? InputCapture.gestureMagnification : InputCapture.gestureRotation
+        core.sendGesture(Gesture(kind: kind, phase: phase, value: e.getDoubleValueField(field)))
+    }
+
+    /// Three-finger swipes (dock swipe events). macOS ignores synthetic ones, so the peer
+    /// gets what they do once the swipe completes: switch Space, Mission Control, App Exposé.
+    private func forwardSwipe(_ e: CGEvent) {
+        guard e.getIntegerValueField(InputCapture.gestureSubtype) == 23 else { return }
+        let phase = e.getIntegerValueField(InputCapture.gesturePhase)
+        let motion = e.getIntegerValueField(InputCapture.swipeMotion)
+        let progress = e.getDoubleValueField(InputCapture.swipeProgress)
+        let finished = state.withLock { s -> (motion: Int64, progress: Double)? in
+            if phase == 1 { (s.swipeMotion, s.swipeProgress) = (0, 0) }
+            if motion != 0 { s.swipeMotion = motion }
+            if progress != 0 { s.swipeProgress = progress }
+            guard phase == 4 else { return nil } // ended (8: cancelled)
+            return (s.swipeMotion, s.swipeProgress)
+        }
+        guard let finished else { return }
+        Log.info(String(format: "three-finger swipe: motion %lld, progress %.2f", finished.motion, finished.progress))
+        guard abs(finished.progress) > 0.1 else { return }
+        switch finished.motion {
+        case 1: // fingers left: the Space on the right, as here
+            pressOnPeer(finished.progress < 0 ? 0x4F : 0x50, modifiers: [0xE0])
+        case 2:
+            if finished.progress < 0 {
+                core.sendConsumer(usage: 0x29F, down: true) // Mission Control
+                core.sendConsumer(usage: 0x29F, down: false)
+            } else {
+                pressOnPeer(0x51, modifiers: [0xE0]) // App Exposé: ⌃↓
+            }
+        default:
+            break
+        }
+    }
+
+    /// A key press (HID usages) with modifiers, on the peer.
+    private func pressOnPeer(_ usage: UInt16, modifiers: [UInt16]) {
+        for m in modifiers { core.sendKey(hid: m, down: true) }
+        core.sendKey(hid: usage, down: true)
+        core.sendKey(hid: usage, down: false)
+        for m in modifiers.reversed() { core.sendKey(hid: m, down: false) }
     }
 }

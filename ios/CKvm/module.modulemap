@@ -1,0 +1,5 @@
+module CKvm [system] {
+    header "../../ffi/include/kvm.h"
+    link "kvm_ffi"
+    export *
+}

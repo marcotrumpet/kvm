@@ -1,7 +1,8 @@
 # KVM
 
 Share one mouse and keyboard between two computers, peer to peer, on the same network or
-over the internet. A menu bar app on macOS; Windows and Linux are planned.
+over the internet. A menu bar app on macOS, plus an iPhone and iPad app that controls a Mac;
+Windows and Linux are planned.
 
 - **Switching**: a global shortcut, or hovering over the other computer's screen in the viewer.
 - **Direct connections** via [iroh](https://github.com/n0-computer/iroh) (QUIC, hole punching,
@@ -22,6 +23,8 @@ over the internet. A menu bar app on macOS; Windows and Linux are planned.
 | `ffi/` | C ABI over the core (`ffi/include/kvm.h`) for the platform apps. |
 | `awdl-helper/` | Small root daemon that keeps `awdl0` down while the app asks. |
 | `macos/` | Swift menu bar app: capture, injection, UI, screen capture and display. |
+| `ios/` | iPhone/iPad remote control (Xcode project); shares `Core.swift` and `VideoFrames.swift` with `macos/`. |
+| `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |
 
 ## Build (macOS)
@@ -39,10 +42,36 @@ ad-hoc otherwise.
 
 The app needs Accessibility and Input Monitoring, plus Screen Recording to share its screen.
 
+## iPhone and iPad
+
+A remote control for a Mac: its screen, the touch screen as a trackpad (or direct touch on the
+picture), the on-screen keyboard (typed text arrives right whatever the Mac's layout, plus a
+bar with esc, tab, arrows and sticky ⌃⌥⌘⇧), and on iPad a hardware keyboard and a mouse or
+trackpad (pointer locked). It is paired next to the Mac's other computer, not instead of it.
+
+```sh
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim   # once
+open ios/KVM.xcodeproj                                      # then Run; a build phase builds the Rust core
+```
+
+Pair: on the Mac open KVM Settings and scan the code under "iPhone and iPad" with the Camera
+or the app's + button, then allow it on the Mac.
+
+Gestures (trackpad mode): drag moves the pointer, tap clicks, two-finger tap right-clicks,
+two-finger drag scrolls, touch and hold then drag drags. Touch mode: tap clicks where you
+tap, drag drags from there, touch and hold right-clicks. Both: pinch zooms and two fingers
+turning rotate (real trackpad gestures on the Mac, also from an iPad trackpad); three fingers
+swiping up show Mission Control, down App Exposé, left and right switch Spaces. With several
+displays, pushing the pointer past the left or right edge of the one shown switches to the
+next. An iPad trackpad or mouse moves the Mac's pointer directly (raw deltas when iPadOS
+locks the pointer to the app, otherwise the iPad pointer points at the picture).
+
 ## Testing without the app
 
 ```sh
 cargo build --release
 target/release/kvm-cli id
 target/release/kvm-cli run --peer <other id> --synthetic 5 --bench 10
+target/release/kvm-cli host            # stand-in computer for the iOS app: accepts pairing, prints input
+cargo test -p kvm-core --test remote -- --ignored   # remote-control link (needs the network)
 ```

@@ -19,10 +19,12 @@ final class Pairing: ObservableObject {
     @Published var message: String?
 
     private let controller: Controller
+    let remotes: RemoteHost
     private var core: Core { controller.core }
 
-    init(controller: Controller) {
+    init(controller: Controller, remotes: RemoteHost) {
         self.controller = controller
+        self.remotes = remotes
         core.onMachineEvent = { [weak self] event in
             DispatchQueue.main.async { self?.handle(event) }
         }
@@ -67,16 +69,20 @@ final class Pairing: ObservableObject {
             }
         case .expired(let id):
             nearby.removeAll { $0.id == id }
-        case .pairRequest(let id, let name, let code):
-            askToAccept(id: id, name: name, code: code)
-        case .pairResult(let id, let accepted, let detail):
+        case .pairRequest(let id, let name, let code, let remote):
+            if remote {
+                askToAcceptRemote(id: id, name: name, code: code)
+            } else {
+                askToAccept(id: id, name: name, code: code)
+            }
+        case .pairResult(let id, let accepted, let detail, let failed):
             guard outgoing?.id == id else { return }
             let name = outgoing?.name ?? detail
             outgoing = nil
             if accepted {
                 adopt(id)
                 message = "Paired with \(name)."
-            } else if detail == name || detail.isEmpty {
+            } else if !failed {
                 message = "\(name) declined."
             } else {
                 message = "Couldn't pair with \(name): \(detail)"
@@ -104,6 +110,34 @@ final class Pairing: ObservableObject {
         } else if accept {
             message = "The request from \(name) expired. Ask again from \(name)."
         }
+    }
+
+    private func askToAcceptRemote(id: String, name: String, code: String) {
+        let alert = NSAlert()
+        alert.messageText = "\(name) wants to control this Mac"
+        alert.informativeText = "Check that \(name) shows the same code:\n\n\(Pairing.spaced(code))\n\nIt will be able to use this Mac's mouse and keyboard and see its screen. The pairing with your other computer stays as it is."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Decline")
+        NSApp.activate(ignoringOtherApps: true)
+        let accept = alert.runModal() == .alertFirstButtonReturn
+        if core.respondPairing(id, accept: accept) {
+            if accept {
+                remotes.add(id: id, name: name)
+                message = "\(name) can now control this Mac."
+            }
+        } else if accept {
+            message = "The request from \(name) expired. Try again on \(name)."
+        }
+    }
+
+    /// What a phone or tablet scans to pair with this Mac.
+    func pairingLink(myID: String) -> String {
+        var c = URLComponents()
+        c.scheme = "kvm"
+        c.host = "pair"
+        c.queryItems = [URLQueryItem(name: "id", value: myID),
+                        URLQueryItem(name: "name", value: Host.current().localizedName ?? "Mac")]
+        return c.string ?? "kvm://pair?id=\(myID)"
     }
 
     /// "823342" -> "823 342"

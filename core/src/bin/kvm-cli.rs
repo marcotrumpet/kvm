@@ -5,6 +5,8 @@
 //!
 //!   kvm-cli discover [--accept]       list KVM machines on this network
 //!   kvm-cli pair --peer <ID>          ask a machine to pair
+//!   kvm-cli host                      act as a computer for remote controls (iPhone, iPad):
+//!                                     accept every pairing, print what arrives
 //!
 //! Use `--state <dir>` (and `--name`) to run two instances on one machine.
 
@@ -72,6 +74,12 @@ enum Command {
         #[arg(long)]
         peer: EndpointId,
     },
+    /// Accept remote controls (pairing included) and print the input they send.
+    Host {
+        /// Remote controls already paired.
+        #[arg(long, num_args = 1..)]
+        allow: Vec<EndpointId>,
+    },
 }
 
 #[derive(Default)]
@@ -117,6 +125,7 @@ async fn main() -> Result<()> {
         }
         Command::Discover { accept } => return watch_node(node, None, accept).await,
         Command::Pair { peer } => return watch_node(node, Some(peer), false).await,
+        Command::Host { allow } => return host_remotes(node, allow).await,
     };
     println!("me:   {}\npeer: {peer}", node.id());
 
@@ -236,13 +245,47 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Accepts every remote control that asks to pair, and prints what they send.
+async fn host_remotes(node: Node, allow: Vec<EndpointId>) -> Result<()> {
+    println!("me: {}", node.id());
+    node.set_discoverable(true);
+    let mut allowed: std::collections::HashSet<_> = allow.into_iter().collect();
+    let mut node_events = node.events().expect("events taken once");
+    let (mut link, mut events) = node.accept_remotes(allowed.clone());
+    loop {
+        tokio::select! {
+            Some(event) = node_events.recv() => {
+                println!("{event:?}");
+                if let NodeEvent::PairRequest { id, remote: true, .. } = event {
+                    println!("accepting: {}", node.respond_pairing(id, true));
+                    allowed.insert(id);
+                    drop(link);
+                    (link, events) = node.accept_remotes(allowed.clone());
+                }
+            }
+            Some(event) = events.recv() => match event {
+                Event::Connected { .. } => {
+                    println!("{event:?}");
+                    link.send_clipboard(b"\x00\x01\x00\x0atext/plain\x00\x00\x00\x05hello".to_vec());
+                }
+                Event::Latency(_) => {}
+                other => println!("{other:?}"),
+            },
+            _ = tokio::signal::ctrl_c() => break,
+        }
+    }
+    drop(link);
+    node.close().await;
+    Ok(())
+}
+
 /// Prints machine-level events; with `pair`, exits once that machine has answered.
 async fn watch_node(node: Node, pair: Option<EndpointId>, accept: bool) -> Result<()> {
     println!("me: {}", node.id());
     node.set_discoverable(pair.is_none());
     let mut events = node.events().expect("events taken once");
     if let Some(peer) = pair {
-        node.request_pairing(peer);
+        node.request_pairing(peer, false);
     }
     loop {
         tokio::select! {

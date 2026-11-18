@@ -17,6 +17,8 @@ final class ClipboardSync: NSObject, NSPasteboardItemDataProvider {
     /// sent straight back.
     private var setByPeer: Int?
     var connected = false
+    /// Send files copied in Finder (off for remote controls, which can't paste them).
+    var shareFiles = true
     /// Main thread; something worth telling the user (e.g. a copy too big to share).
     var onNotice: ((String) -> Void)?
 
@@ -61,7 +63,7 @@ final class ClipboardSync: NSObject, NSPasteboardItemDataProvider {
               Set(item.types.map(\.rawValue)).isDisjoint(with: ClipboardSync.privateTypes) else { return }
         let files = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
         if !files.isEmpty {
-            if Settings.clipboardFileLimit > 0 { shareCopiedFiles(files, changeCount: pasteboard.changeCount) }
+            if shareFiles, Settings.clipboardFileLimit > 0 { shareCopiedFiles(files, changeCount: pasteboard.changeCount) }
         } else if let payload = ClipboardSync.encodeContents(item) {
             core.sendClipboard(payload)
         }
