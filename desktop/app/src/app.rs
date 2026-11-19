@@ -374,6 +374,23 @@ impl App {
                 }
             }
             Event::LockRequested => self.injector.lock_screen(),
+            // Files copied on a Mac arrive for its clipboard (clipboard = true): not offered
+            // for pasting here yet, so only files sent on purpose are announced.
+            Event::FileReceived { path, index, count, clipboard: false, .. } if index + 1 == count => {
+                let peer = self.state.lock().unwrap().peer_name.clone().unwrap_or_else(|| "The other computer".into());
+                std::thread::spawn(move || {
+                    let what = if count == 1 { "a file".to_string() } else { format!("{count} files") };
+                    if dialog::ask("KVM", &format!("{peer} sent {what} to your Downloads folder. Show it?")) {
+                        reveal(&path);
+                    }
+                });
+            }
+            Event::FileReceiveFailed { name, error, clipboard: false, .. } => {
+                std::thread::spawn(move || dialog::tell("KVM", &format!("Receiving {name} failed: {error}")));
+            }
+            Event::FileSendDone { error: Some(error), .. } => {
+                std::thread::spawn(move || dialog::tell("KVM", &format!("Sending failed: {error}")));
+            }
             Event::VideoRequested(_) => warn!("the peer asked to view this screen: not supported here yet"),
             _ => {}
         }
@@ -617,6 +634,16 @@ impl App {
         menu.push(MenuEntry::Submenu { label: "iPhone and iPad".into(), children: remotes });
         drop(s);
         menu.push(MenuEntry::Separator);
+        if config.peer_id.is_some() {
+            let connected = self.state.lock().unwrap().connected;
+            menu.push(MenuEntry::Item {
+                id: "send-files".into(),
+                label: format!("Send Files to {peer}…"),
+                enabled: connected,
+                checked: None,
+            });
+        }
+        menu.push(MenuEntry::item("received", "Show Received Files"));
         menu.push(MenuEntry::check("clipboard", "Share Clipboard", config.share_clipboard));
         menu.push(MenuEntry::check("swap", "Mac's Command Key Is Ctrl", config.swap_ctrl_cmd));
         if updater::available() {
@@ -677,6 +704,22 @@ impl Delegate for App {
                 self.refresh();
             }
             "update" => updater::check_now(),
+            "send-files" => {
+                if let Some(app) = self.me.upgrade() {
+                    std::thread::spawn(move || {
+                        let paths = dialog::choose_files("Send Files");
+                        if paths.is_empty() {
+                            return;
+                        }
+                        let _rt = app.rt.enter();
+                        match app.link().and_then(|l| l.send_files(paths.clone(), false)) {
+                            Some(transfer) => info!("sending {} item(s), transfer {transfer}", paths.len()),
+                            None => dialog::tell("KVM", "Not connected to the other computer."),
+                        }
+                    });
+                }
+            }
+            "received" => open(&crate::config::downloads_dir()),
             "copy-id" => {
                 let _ = self.clipboard_in.send(self.node.id().to_string());
             }
@@ -727,6 +770,18 @@ impl Delegate for App {
 
 fn spaced(code: &str) -> String {
     if code.len() == 6 { format!("{} {}", &code[..3], &code[3..]) } else { code.to_string() }
+}
+
+/// Shows a file in its folder.
+fn reveal(path: &std::path::Path) {
+    let result = if cfg!(windows) {
+        std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(path)).spawn()
+    };
+    if let Err(err) = result {
+        warn!("showing {}: {err}", path.display());
+    }
 }
 
 /// Opens a file with its default app.

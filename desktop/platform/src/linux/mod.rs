@@ -465,6 +465,20 @@ pub mod dialog {
             let _ = Command::new("notify-send").args([title, text]).status();
         }
     }
+
+    /// A file chooser, several files at once; empty if cancelled.
+    pub fn choose_files(title: &str) -> Vec<std::path::PathBuf> {
+        let out = Command::new("zenity")
+            .args(["--file-selection", "--multiple", "--separator=\n", "--title", title])
+            .output()
+            .or_else(|_| Command::new("kdialog").args(["--multiple", "--separate-output", "--getopenfilename", "."]).output());
+        match out {
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).map(Into::into).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Linux has no installer to update yet: a daily check of the release feed that says when a

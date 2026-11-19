@@ -93,6 +93,18 @@ pub fn log_dir() -> PathBuf {
     }
 }
 
+/// Where files from the peer go: the user's Downloads folder.
+pub fn downloads_dir() -> PathBuf {
+    if cfg!(windows) {
+        return PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Downloads");
+    }
+    let xdg = std::process::Command::new("xdg-user-dir").arg("DOWNLOAD").output().ok();
+    match xdg.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Downloads"),
+    }
+}
+
 /// How this machine introduces itself to the peer.
 pub fn computer_name() -> String {
     let name = if cfg!(windows) {

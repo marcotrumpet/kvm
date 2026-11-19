@@ -101,8 +101,9 @@ keys act as Ctrl on Windows (and Ctrl as Command the other way), so shortcuts st
 the same fingers; the tray menu turns that off. The iPhone and iPad app can control it too
 (mouse, keyboard, typed text on Windows): Allow Pairing in the tray menu, then in the app tap
 + > Enter Computer ID with the ID from Pair Over the Internet > Copy This Computer's ID;
-paired ones are listed (and removed) under iPhone and iPad. Not yet: viewing screens,
-files, the microphone.
+paired ones are listed (and removed) under iPhone and iPad. Files: Send Files in the tray
+menu (or from the Mac's menu bar icon to this computer); they arrive in Downloads. Not yet:
+viewing screens, pasting files copied on the Mac, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.

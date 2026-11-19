@@ -80,6 +80,35 @@ pub mod dialog {
         let style = MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND;
         unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(title), style) };
     }
+
+    /// The standard Open dialog, several files at once; empty if cancelled.
+    pub fn choose_files(title: &str) -> Vec<std::path::PathBuf> {
+        use windows::Win32::System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+        };
+        use windows::Win32::UI::Shell::{
+            FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+        };
+
+        let pick = || -> windows::core::Result<Vec<std::path::PathBuf>> {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+                dialog.SetOptions(dialog.GetOptions()? | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM)?;
+                dialog.SetTitle(&HSTRING::from(title))?;
+                dialog.Show(None)?; // an error when cancelled
+                let items = dialog.GetResults()?;
+                let mut paths = Vec::new();
+                for i in 0..items.GetCount()? {
+                    let name = items.GetItemAt(i)?.GetDisplayName(SIGDN_FILESYSPATH)?;
+                    paths.push(std::path::PathBuf::from(name.to_string()?));
+                    CoTaskMemFree(Some(name.0 as _));
+                }
+                Ok(paths)
+            }
+        };
+        pick().unwrap_or_default()
+    }
 }
 
 /// Updates with WinSparkle (WinSparkle.dll next to the executable), from the same GitHub

@@ -62,6 +62,9 @@ pub mod dialog {
         false
     }
     pub fn tell(_title: &str, _text: &str) {}
+    pub fn choose_files(_title: &str) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
 }
 
 pub mod updater {

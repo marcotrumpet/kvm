@@ -54,6 +54,9 @@ fn run() -> Result<()> {
         unsafe { std::env::set_var("HTTPS_PROXY", proxy) };
     }
 
+    kvm_core::set_download_dir(config::downloads_dir());
+    kvm_core::set_clipboard_dir(std::env::temp_dir().join("kvm-clipboard"));
+
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let config_dir = config::config_dir();
     let node = runtime.block_on(Node::bind(&config_dir, config::computer_name()))?;
