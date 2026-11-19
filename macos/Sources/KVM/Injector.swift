@@ -13,9 +13,10 @@ final class Injector {
     private var keys: Set<UInt16> = []
     private var modifiers: Set<UInt16> = []
     private var lastClick: (button: Int, time: TimeInterval, at: CGPoint, count: Int64)?
-    /// When control came from the peer's screen viewer: the display the pointer is kept on,
+    /// When control came from the peer's screen viewer: the display the pointer is kept on
+    /// (as the peer named it, resolved on each move since displays come and go and resize),
     /// and how far it has been pushed past an edge.
-    private var confined: CGRect?
+    private var confined: UInt32?
     private var overshoot = CGPoint.zero
     private var exitReported = false
     /// How far past an edge (points) counts as leaving, not just reaching it.
@@ -32,7 +33,7 @@ final class Injector {
 
     /// Keeps the pointer on `display` and reports pushes past its edges (`UInt32.max`: off).
     func confine(display: UInt32) {
-        confined = display == UInt32.max ? nil : CGDisplayBounds(Displays.resolve(display))
+        confined = display == UInt32.max ? nil : display
         overshoot = .zero
         exitReported = false
     }
@@ -50,8 +51,8 @@ final class Injector {
 
     func move(dx: Int64, dy: Int64) {
         let target = CGPoint(x: position.x + CGFloat(dx), y: position.y + CGFloat(dy))
-        if let bounds = confined {
-            position = confine(target, to: bounds)
+        if let confined {
+            position = confine(target, to: CGDisplayBounds(Displays.resolve(confined)))
         } else {
             position = clamp(target)
         }
@@ -256,6 +257,10 @@ final class Injector {
     /// Keeps the cursor on a display: inside one as-is, otherwise clamped into the display
     /// it was on, so it can't get lost in the gaps of an uneven multi-monitor layout.
     private func clamp(_ p: CGPoint) -> CGPoint {
+        if displays.contains(where: { $0.contains(p) }) { return p }
+        // Maybe the layout changed since control began (a display resized to the viewer's
+        // shape, added or removed): look again before holding the pointer back.
+        displays = Injector.activeDisplays()
         if displays.contains(where: { $0.contains(p) }) { return p }
         let current = displays.first(where: { $0.contains(position) }) ?? displays.first ?? .zero
         return CGPoint(

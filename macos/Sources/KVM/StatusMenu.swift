@@ -30,16 +30,51 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private func updateIcon() {
         let s = controller.state
-        let modeSymbol = switch s.mode {
-        case .controllingPeer: "arrow.right.square.fill"
-        case .controlledByPeer: "arrow.left.square.fill"
-        case .local: "keyboard"
-        }
-        let symbol = s.sharingScreen ? "rectangle.on.rectangle" : modeSymbol
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "KVM")
-        image?.isTemplate = true
-        item.button?.image = image
+        let active = s.mode != .local || s.sharingScreen
+        item.button?.image = active ? StatusMenu.activeIcon : StatusMenu.idleIcon
         item.button?.appearsDisabled = !s.connected || s.stalled
+    }
+
+    private static let idleIcon = icon(active: false)
+    private static let activeIcon = icon(active: true)
+
+    /// The app icon's two screens as a menu bar template; `active` (controlling, controlled
+    /// or sharing the screen) fills the front one.
+    private static func icon(active: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let line: CGFloat = 1.5
+            let front = NSRect(x: 6, y: 5, width: 11, height: 7.5)
+            let back = NSRect(x: 1, y: 8, width: 11, height: 8)
+            let frontPath = NSBezierPath(roundedRect: front, xRadius: 1.5, yRadius: 1.5)
+            // The back screen stops short of the front one, as in the app icon.
+            NSGraphicsContext.saveGraphicsState()
+            let clip = NSBezierPath(rect: NSRect(x: 0, y: 0, width: 18, height: 18))
+            clip.append(NSBezierPath(roundedRect: front.insetBy(dx: -line, dy: -line), xRadius: 2.5, yRadius: 2.5))
+            clip.windingRule = .evenOdd
+            clip.addClip()
+            let backPath = NSBezierPath(roundedRect: back, xRadius: 1.5, yRadius: 1.5)
+            backPath.lineWidth = line
+            NSColor.black.withAlphaComponent(0.6).setStroke()
+            backPath.stroke()
+            NSGraphicsContext.restoreGraphicsState()
+
+            NSColor.black.set()
+            frontPath.lineWidth = line
+            frontPath.stroke()
+            if active { frontPath.fill() }
+            let stand = NSBezierPath()
+            stand.lineWidth = line
+            stand.lineCapStyle = .round
+            stand.move(to: NSPoint(x: front.midX, y: front.minY))
+            stand.line(to: NSPoint(x: front.midX, y: 2.5))
+            stand.move(to: NSPoint(x: front.midX - 2.5, y: 2.5))
+            stand.line(to: NSPoint(x: front.midX + 2.5, y: 2.5))
+            stand.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "KVM"
+        return image
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

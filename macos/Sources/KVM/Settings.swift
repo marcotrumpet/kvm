@@ -124,11 +124,16 @@ enum Settings {
         set { defaults.set(newValue, forKey: "peerWakeAddress") }
     }
 
-    /// Show a panel while another device controls or views this Mac.
+    /// Show a panel while another device controls or views this Mac. Posts
+    /// `controlIndicatorChanged`, so a panel on screen follows right away.
     static var showControlIndicator: Bool {
         get { defaults.object(forKey: "showControlIndicator") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "showControlIndicator") }
+        set {
+            defaults.set(newValue, forKey: "showControlIndicator")
+            NotificationCenter.default.post(name: controlIndicatorChanged, object: nil)
+        }
     }
+    static let controlIndicatorChanged = Notification.Name("KVMControlIndicatorChanged")
 
     /// The screen viewer's how-to-control tip was shown.
     static var viewerTipShown: Bool {

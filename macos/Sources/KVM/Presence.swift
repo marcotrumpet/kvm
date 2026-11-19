@@ -74,13 +74,22 @@ final class ControlIndicator {
     private let label = NSTextField(labelWithString: "")
     /// Stacking position, so two indicators (computer and phone) don't overlap.
     private let slot: Int
+    /// The last update, shown again when the setting is turned back on.
+    private var last: (name: String, controlling: Bool, viewing: Bool)?
 
     init(slot: Int = 0) {
         self.slot = slot
+        NotificationCenter.default.addObserver(
+            forName: Settings.controlIndicatorChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, let last else { return }
+            update(name: last.name, controlling: last.controlling, viewing: last.viewing)
+        }
     }
 
     /// `controlling`/`viewing`: what `name` is doing; neither hides the panel.
     func update(name: String, controlling: Bool, viewing: Bool) {
+        last = (name, controlling, viewing)
         guard Settings.showControlIndicator, controlling || viewing else {
             panel?.orderOut(nil)
             return

@@ -19,6 +19,9 @@ final class VirtualDisplay {
     private(set) var released = false
     private var size = CGSize.zero
     private weak var owner: AnyObject?
+    /// Mirrored (or an extra screen), as last asked; and a count that cancels pending retries.
+    private var wantsMirror = true
+    private var setupGeneration = 0
 
     private static let maxPixels: UInt32 = 7680
 
@@ -51,14 +54,37 @@ final class VirtualDisplay {
             size = wanted
             Log.info("virtual display -> \(Int(wanted.width))x\(Int(wanted.height))")
         }
+        wantsMirror = mirror
         if mirror {
-            if !mirrored { self.mirror(onto: display.displayID) }
+            if !mirrored { self.mirror(onto: display.displayID, quiet: true) }
         } else {
             unmirror()
             if !placed { place(display.displayID) }
         }
+        setupGeneration += 1
+        if !isSetUp { retrySetup() }
         Displays.extended.withLock { $0 = mirror ? 0 : display.displayID }
         return display.displayID
+    }
+
+    private var isSetUp: Bool { wantsMirror ? mirrored : placed }
+
+    /// A new display takes a moment to come online, and mirroring or placing it fails until
+    /// then: try again shortly instead of waiting for the viewer's next request (which, from
+    /// an iPad, only came with a rotation).
+    private func retrySetup(attempt: Int = 1) {
+        let generation = setupGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in
+            guard generation == setupGeneration, let display, !released, !isSetUp else { return }
+            let last = attempt == 20
+            if wantsMirror { mirror(onto: display.displayID, quiet: !last) } else { place(display.displayID) }
+            if isSetUp { return }
+            if last {
+                Log.warn("virtual display \(display.displayID): still not \(wantsMirror ? "mirrored" : "placed") after 5 s")
+            } else {
+                retrySetup(attempt: attempt + 1)
+            }
+        }
     }
 
     /// The pixel size the display was set to (zero when there is none).
@@ -81,6 +107,7 @@ final class VirtualDisplay {
         guard display != nil, self.owner === owner || self.owner == nil else { return nil }
         unmirror()
         Displays.extended.withLock { $0 = 0 }
+        setupGeneration += 1
         released = true
         return physical
     }
@@ -92,6 +119,7 @@ final class VirtualDisplay {
         Displays.extended.withLock { $0 = 0 }
         released = false
         placed = false
+        setupGeneration += 1
         display = nil // releasing it unplugs it
         size = .zero
         self.owner = nil
@@ -109,7 +137,7 @@ final class VirtualDisplay {
     }
 
     /// Puts the extra screen to the right of the others, top-aligned with the main one.
-    /// Retried on the next `fit` if the new display is not online yet.
+    /// Fails (quietly) while the new display is not online yet.
     private func place(_ id: CGDirectDisplayID) {
         var count: UInt32 = 0
         CGGetActiveDisplayList(0, nil, &count)
@@ -126,19 +154,19 @@ final class VirtualDisplay {
     }
 
     /// Makes the physical main display mirror ours. `.forAppOnly`: undone if the app quits
-    /// or crashes. Retried on the next `fit` if the new display is not online yet.
-    private func mirror(onto id: CGDirectDisplayID) {
+    /// or crashes. `quiet`: failing is expected (the new display may not be online yet).
+    private func mirror(onto id: CGDirectDisplayID, quiet: Bool = false) {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
         var result = CGConfigureDisplayMirrorOfDisplay(config, physical, id)
         guard result == .success else {
             CGCancelDisplayConfiguration(config)
-            Log.warn("mirroring display \(physical) onto the virtual display failed (\(result.rawValue))")
+            if !quiet { Log.warn("mirroring display \(physical) onto the virtual display failed (\(result.rawValue))") }
             return
         }
         result = CGCompleteDisplayConfiguration(config, .forAppOnly)
         guard result == .success else {
-            Log.warn("mirroring display \(physical) onto the virtual display: completing failed (\(result.rawValue))")
+            if !quiet { Log.warn("mirroring display \(physical) onto the virtual display: completing failed (\(result.rawValue))") }
             return
         }
         mirrored = true
