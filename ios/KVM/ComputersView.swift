@@ -7,6 +7,7 @@ struct ComputersView: View {
     @State private var scanning = false
     @State private var enteringID = false
     @State private var typedID = ""
+    @State private var showingSettings = false
 
     var body: some View {
         NavigationStack {
@@ -42,6 +43,9 @@ struct ComputersView: View {
             }
             .navigationTitle("KVM")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Settings", systemImage: "gearshape") { showingSettings = true }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Scan Pairing Code", systemImage: "qrcode.viewfinder") { scanning = true }
@@ -52,6 +56,9 @@ struct ComputersView: View {
                     }
                     .disabled(model.core == nil)
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
             }
             .sheet(isPresented: $scanning) {
                 ScannerView { text in

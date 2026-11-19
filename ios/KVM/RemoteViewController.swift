@@ -235,7 +235,7 @@ final class RemoteViewController: UIViewController {
         // exactly this screen's size, so zooming doesn't resize it.
         let zoom = fitHost == .extend ? 1 : streamZoom
         let size = CGSize(width: pixelSize.width * zoom, height: pixelSize.height * zoom)
-        var params = VideoQuality.auto.params(maxSize: size)
+        var params = Prefs.videoQuality.params(maxSize: size)
         params.fitHost = fitHost
         params.hevc = VideoFrames.decodesHEVC
         params.audio = sound
@@ -1126,6 +1126,11 @@ enum Prefs {
         set { defaults.set(newValue, forKey: "sound") }
     }
 
+    static var videoQuality: VideoQuality {
+        get { defaults.string(forKey: "videoQuality").flatMap(VideoQuality.init) ?? .auto }
+        set { defaults.set(newValue.rawValue, forKey: "videoQuality") }
+    }
+
     static var touchMode: RemoteViewController.TouchMode {
         get { defaults.string(forKey: "touchMode").flatMap(RemoteViewController.TouchMode.init) ?? .trackpad }
         set { defaults.set(newValue.rawValue, forKey: "touchMode") }
@@ -1133,7 +1138,7 @@ enum Prefs {
 
     /// Trackpad pointer speed multiplier.
     static var pointerSpeed: CGFloat {
-        get { defaults.object(forKey: "pointerSpeed") as? CGFloat ?? 1.2 }
-        set { defaults.set(newValue, forKey: "pointerSpeed") }
+        get { CGFloat(defaults.object(forKey: "pointerSpeed") as? Double ?? 1.2) }
+        set { defaults.set(Double(newValue), forKey: "pointerSpeed") }
     }
 }
