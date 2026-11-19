@@ -46,6 +46,16 @@ final class AudioEncoder {
     func encode(_ sample: CMSampleBuffer) {
         guard let description = sample.formatDescription else { return }
         let format = AVAudioFormat(cmAudioFormatDescription: description)
+        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sample))
+        guard frames > 0, let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
+        pcm.frameLength = frames
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sample, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList) == noErr else { return }
+        encode(pcm)
+    }
+
+    func encode(_ pcm: AVAudioPCMBuffer) {
+        let format = pcm.format
         if converter == nil || format != inputFormat {
             guard let made = AVAudioConverter(from: format, to: AudioStream.compressed) else {
                 Log.warn("creating the audio encoder failed")
@@ -56,12 +66,7 @@ final class AudioEncoder {
             inputFormat = format
             packets = 0
         }
-        guard let converter else { return }
-        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sample))
-        guard frames > 0, let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
-        pcm.frameLength = frames
-        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sample, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList) == noErr else { return }
+        guard let converter, pcm.frameLength > 0 else { return }
 
         var fed = false
         while true {
@@ -100,6 +105,8 @@ final class AudioEncoder {
 
 /// Viewer side: payloads in, sound out. A small jitter buffer; packets that arrive while
 /// too much is queued are dropped, so delay can't build up. Any thread.
+/// `outputDevice` (macOS): play there instead of the default output, and not at all while
+/// it returns nil (the microphone must never come out of the speakers).
 final class AudioPlayer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "kvm.audio-player", qos: .userInteractive)
     // Confined to `queue`.
@@ -114,8 +121,10 @@ final class AudioPlayer: @unchecked Sendable {
     private static let startFrames = Int(AudioStream.sampleRate * 0.04)
     private static let maxFrames = Int(AudioStream.sampleRate * 0.15)
     private var observer: NSObjectProtocol?
+    private let outputDevice: (() -> UInt32?)?
 
-    init() {
+    init(outputDevice: (() -> UInt32?)? = nil) {
+        self.outputDevice = outputDevice
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: AudioStream.pcm)
         // Another output device (headphones, AirPlay) stops the engine: start over.
@@ -190,9 +199,19 @@ final class AudioPlayer: @unchecked Sendable {
 
     private func schedule(_ pcm: AVAudioPCMBuffer) {
         if !engine.isRunning {
+            #if os(macOS)
+            if let outputDevice {
+                guard var device = outputDevice(), let unit = engine.outputNode.audioUnit,
+                      AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                           &device, UInt32(MemoryLayout<UInt32>.size)) == noErr else { return }
+            }
+            #endif
             #if os(iOS)
-            try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
-            try? AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            if session.category != .playAndRecord { // the microphone set it up for both
+                try? session.setCategory(.playback, options: [.mixWithOthers])
+            }
+            try? session.setActive(true)
             #endif
             do {
                 try engine.start()
@@ -210,6 +229,93 @@ final class AudioPlayer: @unchecked Sendable {
         if !playing, total >= AudioPlayer.startFrames {
             node.play()
             playing = true
+        }
+    }
+}
+
+/// Controller side: this device's microphone in, payloads out (same format as the host's
+/// sound), while `start`ed. The microphone is mono; both channels carry it. Main thread.
+final class MicrophoneSender {
+    var onPayload: ((Data) -> Void)?
+    private var engine: AVAudioEngine?
+    private let queue = DispatchQueue(label: "kvm.microphone", qos: .userInteractive)
+    private let encoder = AudioEncoder()
+
+    var isRunning: Bool { engine != nil }
+
+    /// Asks for microphone access the first time; false if it is denied or fails.
+    func start(completion: @escaping (Bool) -> Void) {
+        guard engine == nil else { return completion(true) }
+        Self.requestAccess { [weak self] granted in
+            guard let self, granted else { return completion(false) }
+            completion(begin())
+        }
+    }
+
+    func stop() {
+        guard let engine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        self.engine = nil
+        queue.async { [encoder] in encoder.reset() }
+        Log.info("microphone off")
+    }
+
+    private func begin() -> Bool {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
+            try session.setActive(true)
+        } catch {
+            Log.warn("microphone audio session: \(error)")
+            return false
+        }
+        #endif
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0,
+              let stereo = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 2) else {
+            Log.warn("no microphone input")
+            return false
+        }
+        encoder.onPayload = { [weak self] in self?.onPayload?($0) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [queue, encoder] buffer, _ in
+            guard let both = MicrophoneSender.stereo(buffer, as: stereo) else { return }
+            queue.async { encoder.encode(both) }
+        }
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            Log.warn("starting the microphone: \(error)")
+            return false
+        }
+        self.engine = engine
+        Log.info("microphone on (\(Int(format.sampleRate)) Hz)")
+        return true
+    }
+
+    /// The first input channel, on both channels of a new buffer.
+    private static func stereo(_ buffer: AVAudioPCMBuffer, as format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let source = buffer.floatChannelData, buffer.frameLength > 0,
+              let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength),
+              let channels = out.floatChannelData else { return nil }
+        out.frameLength = buffer.frameLength
+        let count = Int(buffer.frameLength)
+        channels[0].update(from: source[0], count: count)
+        channels[1].update(from: source[0], count: count)
+        return out
+    }
+
+    private static func requestAccess(_ done: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: done(true)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in DispatchQueue.main.async { done(granted) } }
+        default: done(false)
         }
     }
 }

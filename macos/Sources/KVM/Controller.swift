@@ -35,6 +35,8 @@ final class Controller {
     private let clipboard: ClipboardSync
     private let viewer = ScreenViewer()
     private let audio = AudioPlayer()
+    /// This Mac's microphone, sent while controlling the peer (if the user wants that).
+    private let microphone = MicrophoneSender()
     private let indicator = ControlIndicator()
     private let injector = Injector()
     private let mode = OSAllocatedUnfairLock(initialState: Mode.local)
@@ -51,6 +53,7 @@ final class Controller {
         capture.setHotkey(Settings.hotkey)
         capture.onHotkey = { [unowned self] in toggle() }
         core.onEvent = { [unowned self] in handle($0) }
+        microphone.onPayload = { [core] in core.sendMicrophone($0) }
         screenHost.onSharingChanged = { [unowned self] in
             state.sharingScreen = $0
             updateIndicator()
@@ -200,6 +203,7 @@ final class Controller {
         }
         if wasControlled {
             injector.end()
+            Microphone.sink.stop()
             publish(mode: .local)
         }
     }
@@ -262,6 +266,8 @@ final class Controller {
             viewer.handle(frame: data, keyframe: keyframe)
         case .audio(let data):
             if Settings.viewerAudio { audio.handle(data) }
+        case .microphone(let data):
+            if mode.withLock({ $0 }) == .controlledByPeer { Microphone.sink.handle(data) }
         case .lockRequested:
             guard Settings.lockTogether else { break }
             returnToLocal(notifyPeer: true) // nothing to control on a locked screen
@@ -337,6 +343,18 @@ final class Controller {
         DispatchQueue.main.async {
             self.state.mode = mode
             self.updateIndicator()
+            self.updateMicrophone()
+        }
+    }
+
+    /// Main thread: the microphone goes to the peer while controlling it, if wanted.
+    func updateMicrophone() {
+        if Settings.sendMicrophone, state.mode == .controllingPeer {
+            microphone.start { granted in
+                if !granted { Log.warn("microphone access denied: allow KVM in System Settings > Privacy & Security > Microphone") }
+            }
+        } else {
+            microphone.stop()
         }
     }
 

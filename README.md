@@ -14,6 +14,8 @@ Windows and Linux are planned.
 - **Screen viewer**: hardware HEVC or H.264, adaptive bitrate and quality, the host's sound,
   multiple displays, full-screen 1:1. The host can re-lay out its desktop to the viewer's
   size or shape, or add the viewer as an extra screen (iPad, like Sidecar).
+- **Microphone**: the controlling computer's, iPhone's or iPad's microphone becomes "KVM
+  Microphone" on the controlled Mac, for calls there (a small Core Audio driver).
 - **Lock and wake**: locking either Mac locks both; switching to a sleeping Mac wakes it
   (Wake-on-LAN, same network).
 - **In use from elsewhere**: a panel on the Mac while it is controlled or viewed, with a
@@ -29,6 +31,7 @@ Windows and Linux are planned.
 | `ffi/` | C ABI over the core (`ffi/include/kvm.h`) for the platform apps. |
 | `awdl-helper/` | Small root daemon that keeps `awdl0` down while the app asks. |
 | `macos/` | Swift menu bar app: capture, injection, UI, screen capture and display. |
+| `macos/Microphone/` | "KVM Microphone" Core Audio driver (C): a hidden output device looped into an input for call apps. |
 | `ios/` | iPhone/iPad remote control (Xcode project); shares `Core.swift` and `VideoFrames.swift` with `macos/`. |
 | `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |

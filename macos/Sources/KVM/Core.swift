@@ -44,6 +44,8 @@ enum CoreEvent {
     case wakeAddress(Data)
     /// The peer's user took their machine back: control and viewing ended there.
     case takenBack
+    /// One encoded packet of the peer's microphone, while it controls this machine.
+    case microphone(Data)
 }
 
 /// Machine-level events: discovery on this network and pairing. Background thread.
@@ -272,6 +274,14 @@ final class Core {
         }
     }
 
+    /// While controlling the peer: one encoded packet of this device's microphone.
+    func sendMicrophone(_ data: Data) {
+        data.withUnsafeBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            kvm_microphone_send(node, base, raw.count)
+        }
+    }
+
     /// This screen locked: the peer locks too.
     func sendLock() { kvm_send_lock(node) }
 
@@ -405,6 +415,7 @@ private extension CoreEvent {
         case KVM_EV_LOCK: self = .lockRequested
         case KVM_EV_WAKE_ADDRESS: self = .wakeAddress(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
         case KVM_EV_TAKEN_BACK: self = .takenBack
+        case KVM_EV_MICROPHONE: self = .microphone(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
         default:
             let transfer = e.id.flatMap { UInt64(String(cString: $0)) } ?? 0
             switch Int(e.kind) {

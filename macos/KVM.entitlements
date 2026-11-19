@@ -6,5 +6,8 @@
          administrator privileges", which the hardened runtime only allows with this. -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- Sending the microphone to the controlled computer. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

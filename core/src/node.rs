@@ -568,6 +568,10 @@ impl Link {
         self.with(|s| s.send_audio(payload))
     }
 
+    pub fn send_microphone(&self, payload: Vec<u8>) {
+        self.with(|s| s.send_microphone(payload))
+    }
+
     pub fn send_lock(&self) {
         self.with(Session::send_lock)
     }

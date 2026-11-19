@@ -42,6 +42,7 @@ enum {
     KVM_EV_LOCK = 42,         // the peer's screen locked: lock this one too
     KVM_EV_WAKE_ADDRESS = 43, // data/data_len = the peer's MAC (6 bytes), for kvm_wake
     KVM_EV_TAKEN_BACK = 44,   // the peer's user took their machine back: stop controlling and viewing
+    KVM_EV_MICROPHONE = 45,   // while controlled: data/data_len = one encoded packet of the peer's microphone
     // File transfers; `id` is the transfer id (decimal). For receive events, flag = the
     // files were copied on the peer (cached for pasting in <clipboard dir>/<id>/).
     KVM_EV_FILE_SEND_PROGRESS = 31,    // a = bytes sent, b = total
@@ -131,6 +132,7 @@ void kvm_send_display_list(const KvmNode *node, const uint8_t *data, size_t len)
 void kvm_confine(const KvmNode *node, uint32_t display); // 0xFFFFFFFF: not confined
 void kvm_edge_exit(const KvmNode *node, uint8_t edge, uint16_t along);
 void kvm_audio_send(const KvmNode *node, const uint8_t *data, size_t len); // copies data; dropped without datagrams
+void kvm_microphone_send(const KvmNode *node, const uint8_t *data, size_t len); // while controlling; like kvm_audio_send
 
 // Lock, wake and take back.
 void kvm_send_lock(const KvmNode *node);

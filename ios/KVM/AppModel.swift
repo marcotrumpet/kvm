@@ -48,6 +48,8 @@ final class AppModel: ObservableObject {
     /// What we asked the computer to stream, re-sent after reconnecting.
     private var videoParams: VideoParams?
     private let audio = AudioPlayer()
+    /// This device's microphone, sent while controlling the computer (`Prefs.sendMicrophone`).
+    private let microphone = MicrophoneSender()
     private let latency = OSAllocatedUnfairLock(initialState: (ema: 0.0, published: Date.distantPast))
 
     init() {
@@ -67,6 +69,7 @@ final class AppModel: ObservableObject {
             return
         }
         core?.onEvent = { [weak self] in self?.handle($0) }
+        microphone.onPayload = { [weak self] in self?.core?.sendMicrophone($0) }
         core?.onMachineEvent = { [weak self] event in DispatchQueue.main.async { self?.handle(event) } }
         core?.watchMachines()
     }
@@ -159,8 +162,25 @@ final class AppModel: ObservableObject {
         _ = core.dialPeer(active.id)
     }
 
+    func setMicrophone(_ on: Bool) {
+        Prefs.sendMicrophone = on
+        updateMicrophone()
+    }
+
+    /// Main thread: the microphone goes to the computer while connected to it, if wanted.
+    private func updateMicrophone() {
+        guard Prefs.sendMicrophone, link == .connected else {
+            microphone.stop()
+            return
+        }
+        microphone.start { [weak self] granted in
+            if !granted { self?.message = "KVM can't use the microphone: allow it in Settings > Privacy & Security > Microphone." }
+        }
+    }
+
     private func resetLink(to state: LinkState) {
         link = state
+        updateMicrophone()
         direct = nil
         latencyMs = nil
         displays = []
@@ -255,6 +275,7 @@ final class AppModel: ObservableObject {
             core?.enter()
             DispatchQueue.main.async { [self] in
                 link = .connected
+                updateMicrophone()
                 if let i = computers.firstIndex(where: { $0.id == peer }), computers[i].name != name, !name.isEmpty {
                     computers[i].name = name
                     Store.computers = computers
@@ -264,9 +285,15 @@ final class AppModel: ObservableObject {
             }
         case .recovered:
             core?.enter() // a stall hands control back; take it again
-            DispatchQueue.main.async { self.link = .connected }
+            DispatchQueue.main.async {
+                self.link = .connected
+                self.updateMicrophone()
+            }
         case .stalled:
-            DispatchQueue.main.async { self.link = .stalled }
+            DispatchQueue.main.async {
+                self.link = .stalled
+                self.updateMicrophone()
+            }
         case .disconnected:
             audio.stop()
             DispatchQueue.main.async { self.resetLink(to: self.active == nil ? .idle : .connecting) }

@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 DIST="$ROOT/dist"
 APP="$DIST/KVM.app"
-VERSION="${VERSION:-0.16.0}"
+VERSION="${VERSION:-0.17.0}"
 # Sparkle updates: release.sh publishes appcast.xml with each GitHub release; the key pair
 # was made with Sparkle's generate_keys (private half in the login keychain).
 FEED_URL="https://github.com/marcotrumpet/kvm/releases/latest/download/appcast.xml"
@@ -64,6 +64,15 @@ swift build -c release --arch arm64 --arch x86_64
 PRODUCTS="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
 BIN="$PRODUCTS/KVM"
 
+echo "==> Microphone driver"
+DRIVER="$ROOT/target/KVMMicrophone.driver"
+rm -rf "$DRIVER"
+mkdir -p "$DRIVER/Contents/MacOS"
+cp Microphone/Info.plist "$DRIVER/Contents/Info.plist"
+clang -bundle -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 -O2 -Wall -Wextra -Werror \
+    -framework CoreAudio -framework CoreFoundation \
+    -o "$DRIVER/Contents/MacOS/KVMMicrophone" Microphone/KVMMicrophone.c
+
 echo "==> Bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
@@ -77,6 +86,9 @@ for part in "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "
 done
 cp "$ROOT/target/universal/kvm-awdl-helper" "$APP/Contents/Resources/kvm-awdl-helper"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns" # icon/make-icon.swift
+ditto "$DRIVER" "$APP/Contents/Resources/KVMMicrophone.driver"
+codesign --force --sign "$SIGN_ID" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} --identifier "com.marcogaletta.kvm.microphone" \
+    "$APP/Contents/Resources/KVMMicrophone.driver"
 codesign --force --sign "$SIGN_ID" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} --identifier "com.marcogaletta.kvm.awdl-helper" \
     "$APP/Contents/Resources/kvm-awdl-helper"
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -97,6 +109,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>NSLocalNetworkUsageDescription</key><string>KVM connects directly to your other computer on the local network.</string>
     <key>NSBonjourServices</key><array><string>_kvm._udp</string></array>
     <key>NSAppleEventsUsageDescription</key><string>KVM installs its Wi-Fi helper with your administrator password.</string>
+    <key>NSMicrophoneUsageDescription</key><string>KVM sends your microphone to the computer you control, for calls there.</string>
     <key>SUFeedURL</key><string>$FEED_URL</string>
     <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
     <key>SUEnableAutomaticChecks</key><true/>

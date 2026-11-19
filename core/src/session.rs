@@ -90,6 +90,8 @@ pub enum Event {
     Disconnected { reason: String },
     /// An encoded audio packet of the peer's sound, while viewing it with audio.
     Audio(Vec<u8>),
+    /// An encoded packet of the peer's microphone, while it controls this machine.
+    Microphone(Vec<u8>),
     /// The peer's screen locked: lock this one too.
     LockRequested,
     /// How to wake the peer later (its MAC address).
@@ -422,6 +424,17 @@ impl Session {
         }
     }
 
+    /// Sends one encoded packet of our microphone while we control the peer. Dropped like
+    /// `send_audio` when the path carries no datagrams.
+    pub fn send_microphone(&self, payload: Vec<u8>) {
+        if self.shared.controlling.load(Ordering::Acquire) {
+            let bytes = protocol::encode_datagram(&Datagram::Microphone(payload));
+            if let Err(err) = self.shared.conn.send_datagram(bytes.into()) {
+                trace!("microphone packet dropped: {err}");
+            }
+        }
+    }
+
     /// Our screen locked: asks the peer to lock too.
     pub fn send_lock(&self) {
         self.shared.send(Control::Lock);
@@ -634,6 +647,11 @@ async fn datagram_loop(shared: Arc<Shared>) {
             Ok(Datagram::Audio(payload)) => {
                 if shared.viewing.load(Ordering::Acquire) {
                     let _ = shared.events.send(Event::Audio(payload));
+                }
+            }
+            Ok(Datagram::Microphone(payload)) => {
+                if shared.rx.lock().unwrap().controlled {
+                    let _ = shared.events.send(Event::Microphone(payload));
                 }
             }
             Err(err) => warn!("bad datagram: {err:#}"),

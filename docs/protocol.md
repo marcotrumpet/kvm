@@ -11,7 +11,7 @@ of paired remote controls, one session at a time. They only ever send input.
 
 | Channel | Reliability | Carries |
 |---|---|---|
-| QUIC datagrams | unreliable | `Datagram::Motion`, `Datagram::Audio` |
+| QUIC datagrams | unreliable | `Datagram::Motion`, `Datagram::Audio`, `Datagram::Microphone` |
 | first bi-directional stream | reliable, ordered | `Control` frames: u32 LE length + postcard body, max 64 KiB |
 
 ## Motion
@@ -100,6 +100,14 @@ kind 0 the encoder's magic cookie (before the first packet and every 200 packets
 viewer can start or recover any time), kind 1 a packet. Lost packets are skipped, and the
 viewer drops packets while more than 150 ms are queued, so delay can't build up. Without
 datagrams there is no sound.
+
+### Microphone
+
+The other way, the controller may send its microphone while it controls the receiver
+(after `Enter`, before `Leave`): `Datagram::Microphone`, same payloads as `Audio` (mono
+input on both channels). The core sends it only while controlling and passes it on only
+while controlled. A macOS receiver plays it into the hidden output device of its "KVM
+Microphone" driver, which loops it into the "KVM Microphone" input that call apps use.
 
 ### Displays
 

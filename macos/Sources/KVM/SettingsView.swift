@@ -12,6 +12,7 @@ struct SettingsView: View {
     let setPauseAwdl: (Bool) -> Bool
     /// Returns an error message on failure.
     let uninstallAwdlHelper: () -> String?
+    let setSendMicrophone: (Bool) -> Void
 
     @State private var peerID = Settings.peerID ?? ""
     @State private var peerError: String?
@@ -23,6 +24,10 @@ struct SettingsView: View {
     @State private var wakePeer = Settings.wakePeer
     @State private var showControlIndicator = Settings.showControlIndicator
     @State private var autoUpdate = Updates.shared.automaticallyChecks
+    @State private var sendMicrophone = Settings.sendMicrophone
+    @State private var microphoneInstalled = Microphone.isInstalled
+    @State private var microphoneCurrent = Microphone.isCurrent
+    @State private var microphoneError: String?
     @State private var shareClipboard = Settings.shareClipboard
     @State private var clipboardFileLimit = Settings.clipboardFileLimit
     @State private var downloadDirectory = Settings.downloadDirectory
@@ -34,6 +39,17 @@ struct SettingsView: View {
     @State private var inputMonitoring = Permissions.inputMonitoring
     @State private var screenRecording = Permissions.screenRecording
     private let refresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private func changeMicrophoneDriver(install: Bool) {
+        do {
+            try install ? Microphone.install() : Microphone.uninstall()
+            microphoneError = nil
+        } catch {
+            microphoneError = "\(error)"
+        }
+        microphoneInstalled = Microphone.isInstalled
+        microphoneCurrent = Microphone.isCurrent
+    }
 
     var body: some View {
         Form {
@@ -231,6 +247,28 @@ struct SettingsView: View {
                 Text("To send files, drop them on the KVM menu bar icon or the screen viewer, or use Send Files in the menu.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Microphone") {
+                Toggle("Send this Mac's microphone while controlling the other computer", isOn: $sendMicrophone)
+                    .onChange(of: sendMicrophone) { setSendMicrophone($0) }
+                LabeledContent("KVM Microphone on this Mac") {
+                    if microphoneInstalled {
+                        HStack {
+                            Text(microphoneCurrent ? "Installed" : "Installed, update available").foregroundStyle(.secondary)
+                            if !microphoneCurrent { Button("Update") { changeMicrophoneDriver(install: true) } }
+                            Button("Remove") { changeMicrophoneDriver(install: false) }
+                        }
+                    } else {
+                        Button("Install…") { changeMicrophoneDriver(install: true) }
+                    }
+                }
+                Text("While a computer, iPhone or iPad controls this Mac and sends its microphone, call apps here can use it: choose \"KVM Microphone\" as their microphone. Installing needs your admin password, and sound stops for a moment while Core Audio restarts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let microphoneError {
+                    Text(microphoneError).foregroundStyle(.red)
+                }
             }
 
             Section("General") {

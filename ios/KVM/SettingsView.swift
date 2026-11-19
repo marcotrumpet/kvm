@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("hostFit") private var hostFit = Int(Prefs.hostFit.rawValue)
     @AppStorage("videoQuality") private var quality = VideoQuality.auto.rawValue
     @AppStorage("sound") private var sound = true
+    @AppStorage("sendMicrophone") private var sendMicrophone = false
     @State private var tipsReset = false
 
     var body: some View {
@@ -49,6 +50,14 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("Play the computer's sound", isOn: $sound)
+                }
+
+                Section {
+                    Toggle("Send my microphone", isOn: $sendMicrophone)
+                } header: {
+                    Text("Microphone")
+                } footer: {
+                    Text("While you control a Mac, call apps there can use this device's microphone: choose \"KVM Microphone\" in them. The Mac needs the KVM Microphone driver (KVM Settings > Microphone).")
                 }
 
                 Section {

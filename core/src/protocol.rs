@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"kvm/1";
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 
 /// Upper bound for a single control frame. Bulk data (clipboard) uses its own streams.
 const MAX_FRAME_LEN: usize = 64 * 1024;
@@ -35,6 +35,9 @@ pub enum Datagram {
     /// One encoded audio packet of the host's sound, while viewed with
     /// `VideoParams::audio` (format up to the apps, see docs). Lost packets are skipped.
     Audio(Vec<u8>),
+    /// One encoded packet of the controller's microphone, while it controls the receiver
+    /// (same format as `Audio`). The receiver offers it to its apps as a microphone.
+    Microphone(Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

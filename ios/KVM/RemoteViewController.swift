@@ -370,6 +370,14 @@ final class RemoteViewController: UIViewController {
             if !sound { model.stopAudio() }
             if screenOn { startVideo() }
         }, for: .primaryActionTriggered)
+        let micButton = button(Prefs.sendMicrophone ? "mic" : "mic.slash", "Microphone") {}
+        micButton.addAction(UIAction { [weak self, weak micButton] _ in
+            guard let self else { return }
+            let on = !Prefs.sendMicrophone
+            model.setMicrophone(on)
+            micButton?.configuration?.image = UIImage(systemName: on ? "mic" : "mic.slash")
+            showHint(on ? "Your microphone goes to the computer as \"KVM Microphone\"" : "Microphone off")
+        }, for: .primaryActionTriggered)
         let clipboard = button("doc.on.clipboard", "Send clipboard") { [weak self] in
             self?.model.sendClipboard()
             self?.showHint("Clipboard sent: paste it on the computer")
@@ -422,7 +430,7 @@ final class RemoteViewController: UIViewController {
             macButtons = [menu]
         }
 
-        barButtons = [close, keys, modeButton, screen, fitButton, soundButton, displayButton, clipboard] + macButtons + [info]
+        barButtons = [close, keys, modeButton, screen, fitButton, soundButton, micButton, displayButton, clipboard] + macButtons + [info]
         bar.addArrangedSubviews(barButtons)
         bar.axis = .horizontal
         bar.alignment = .center
@@ -1161,6 +1169,13 @@ enum Prefs {
             return defaults.bool(forKey: "fitHost") ? .shape : .off // the earlier on/off setting
         }
         set { defaults.set(Int(newValue.rawValue), forKey: "hostFit") }
+    }
+
+    /// Send this device's microphone to the computer while controlling it (it appears there
+    /// as "KVM Microphone").
+    static var sendMicrophone: Bool {
+        get { defaults.bool(forKey: "sendMicrophone") }
+        set { defaults.set(newValue, forKey: "sendMicrophone") }
     }
 
     /// Play the computer's sound while showing its screen.

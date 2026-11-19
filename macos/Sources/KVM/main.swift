@@ -94,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     } catch {
                         return "\(error)"
                     }
+                },
+                setSendMicrophone: { [unowned self] on in
+                    Settings.sendMicrophone = on
+                    controller.updateMicrophone()
                 }
             )
             let hosting = NSHostingController(rootView: view)

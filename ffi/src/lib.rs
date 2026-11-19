@@ -40,6 +40,7 @@ pub const KVM_EV_AUDIO: u32 = 41;
 pub const KVM_EV_LOCK: u32 = 42;
 pub const KVM_EV_WAKE_ADDRESS: u32 = 43;
 pub const KVM_EV_TAKEN_BACK: u32 = 44;
+pub const KVM_EV_MICROPHONE: u32 = 45;
 pub const KVM_EV_FILE_SEND_PROGRESS: u32 = 31;
 pub const KVM_EV_FILE_SEND_DONE: u32 = 32;
 pub const KVM_EV_FILE_RECEIVE_PROGRESS: u32 = 33;
@@ -367,6 +368,10 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
             (KVM_EV_WAKE_ADDRESS, 0, 0, false)
         }
         Event::TakenBack => (KVM_EV_TAKEN_BACK, 0, 0, false),
+        Event::Microphone(payload) => {
+            data = payload;
+            (KVM_EV_MICROPHONE, 0, 0, false)
+        }
     };
     let ev = KvmEvent {
         kind,
@@ -697,6 +702,16 @@ pub unsafe extern "C" fn kvm_audio_send(node: *const KvmNode, data: *const u8, l
     }
     let payload = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
     with_link(node, |l| l.send_audio(payload))
+}
+
+/// While controlling the peer: one encoded packet of our microphone. Copies `data`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_microphone_send(node: *const KvmNode, data: *const u8, len: usize) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+    let payload = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+    with_link(node, |l| l.send_microphone(payload))
 }
 
 /// This machine's screen locked: the peer locks too (KVM_EV_LOCK there).

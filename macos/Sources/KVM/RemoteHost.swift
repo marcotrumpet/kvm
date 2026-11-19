@@ -83,6 +83,7 @@ final class RemoteHost {
             return c
         }
         if was { injector.end() }
+        Microphone.sink.stop()
         setControlling(false)
     }
 
@@ -119,6 +120,8 @@ final class RemoteHost {
             setControlling(true)
         case .left:
             release()
+        case .microphone(let data):
+            if isControlled() { Microphone.sink.handle(data) }
         case .move(let dx, let dy):
             if isControlled() { injector.move(dx: dx, dy: dy) }
         case .scroll(let dx, let dy):

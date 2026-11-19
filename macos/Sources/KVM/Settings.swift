@@ -135,6 +135,12 @@ enum Settings {
     }
     static let controlIndicatorChanged = Notification.Name("KVMControlIndicatorChanged")
 
+    /// Send this Mac's microphone to the peer while controlling it.
+    static var sendMicrophone: Bool {
+        get { defaults.bool(forKey: "sendMicrophone") }
+        set { defaults.set(newValue, forKey: "sendMicrophone") }
+    }
+
     /// The screen viewer's how-to-control tip was shown.
     static var viewerTipShown: Bool {
         get { defaults.bool(forKey: "viewerTipShown") }

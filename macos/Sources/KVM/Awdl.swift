@@ -32,19 +32,10 @@ final class Awdl {
     /// code hashes rather than bytes: re-signing changes the bytes but not the code.
     static var isCurrent: Bool {
         guard isInstalled, let bundled = bundledHelper,
-              let installedHash = codeHash(helperPath) else { return false }
-        return codeHash(bundled) == installedHash
+              let installedHash = Admin.codeHash(helperPath) else { return false }
+        return Admin.codeHash(bundled) == installedHash
     }
 
-    private static func codeHash(_ path: String) -> Data? {
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
-              let code else { return nil }
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
-              let dict = info as? [String: Any] else { return nil }
-        return dict[kSecCodeInfoUnique as String] as? Data
-    }
 
     /// nil when this Mac has no awdl0 interface.
     static var isUp: Bool? {
@@ -82,9 +73,9 @@ final class Awdl {
     func uninstall() throws {
         setRequested(false)
         Settings.pauseAwdl = false
-        try Awdl.runAsAdmin("""
+        try Admin.run("""
             (/bin/launchctl bootout system/\(Awdl.label) 2>/dev/null || true) && \
-            /bin/rm -f \(Awdl.quote(Awdl.helperPath)) \(Awdl.quote(Awdl.plistPath))
+            /bin/rm -f \(Admin.quote(Awdl.helperPath)) \(Admin.quote(Awdl.plistPath))
             """)
     }
 
@@ -163,22 +154,25 @@ final class Awdl {
         try data.write(to: staged)
         defer { try? FileManager.default.removeItem(at: staged) }
 
-        try runAsAdmin([
+        try Admin.run([
             "/bin/mkdir -p /Library/PrivilegedHelperTools",
             "(/bin/launchctl bootout system/\(label) 2>/dev/null || true)",
-            "/bin/cp \(quote(bundled)) \(quote(helperPath))",
-            "/usr/sbin/chown root:wheel \(quote(helperPath))",
-            "/bin/chmod 755 \(quote(helperPath))",
-            "/bin/cp \(quote(staged.path)) \(quote(plistPath))",
-            "/usr/sbin/chown root:wheel \(quote(plistPath))",
-            "/bin/chmod 644 \(quote(plistPath))",
-            "/bin/launchctl bootstrap system \(quote(plistPath))",
+            "/bin/cp \(Admin.quote(bundled)) \(Admin.quote(helperPath))",
+            "/usr/sbin/chown root:wheel \(Admin.quote(helperPath))",
+            "/bin/chmod 755 \(Admin.quote(helperPath))",
+            "/bin/cp \(Admin.quote(staged.path)) \(Admin.quote(plistPath))",
+            "/usr/sbin/chown root:wheel \(Admin.quote(plistPath))",
+            "/bin/chmod 644 \(Admin.quote(plistPath))",
+            "/bin/launchctl bootstrap system \(Admin.quote(plistPath))",
         ].joined(separator: " && "))
         Log.info("AWDL helper installed")
     }
+}
 
+/// Root operations behind the standard macOS admin password prompt, and code identity.
+enum Admin {
     /// Runs a shell command as root after the standard macOS admin password prompt.
-    private static func runAsAdmin(_ command: String) throws {
+    static func run(_ command: String) throws {
         let escaped = command
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -190,7 +184,18 @@ final class Awdl {
         }
     }
 
-    private static func quote(_ s: String) -> String {
+    static func quote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// A code signature's unique hash: the same code re-signed keeps it.
+    static func codeHash(_ path: String) -> Data? {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        return dict[kSecCodeInfoUnique as String] as? Data
     }
 }
