@@ -33,18 +33,34 @@ enum Settings {
         }
     }
 
-    /// The side of this Mac the paired computer is on, for moving the pointer across (nil:
-    /// only the shortcut and the viewer switch).
-    static var edgeSide: Edge? {
-        get { (defaults.object(forKey: "edgeSide") as? Int).flatMap(Edge.init) }
-        set { defaults.set(newValue?.rawValue, forKey: "edgeSide") }
+    /// Switch by pushing the pointer past the side of this Mac the paired computer is on.
+    /// On if a side was picked before there was a switch (0.19.0).
+    static var edgeEnabled: Bool {
+        get { defaults.object(forKey: "edgeEnabled") as? Bool ?? (defaults.object(forKey: "edgeSide") != nil) }
+        set { defaults.set(newValue, forKey: "edgeEnabled") }
     }
 
-    /// How the two desktops line up along that side: 0 tops (or left sides) level, 1
-    /// bottoms (or right sides), 0.5 centered.
-    static var edgeAlignment: Double {
-        get { defaults.object(forKey: "edgeAlignment") as? Double ?? 0.5 }
-        set { defaults.set(newValue, forKey: "edgeAlignment") }
+    /// The side of this Mac the paired computer is on.
+    static var edgePlacement: Edge {
+        get { (defaults.object(forKey: "edgeSide") as? Int).flatMap(Edge.init) ?? .right }
+        set { defaults.set(newValue.rawValue, forKey: "edgeSide") }
+    }
+
+    /// Where along that side its desktop starts, in points from where this Mac's starts
+    /// (top or left of both desktops' bounding boxes; nil: centered).
+    static var edgeOffset: Double? {
+        get { defaults.object(forKey: "edgeOffset") as? Double }
+        set { defaults.set(newValue, forKey: "edgeOffset") }
+    }
+
+    /// The side to move the pointer across, if that's on.
+    static var edgeSide: Edge? { edgeEnabled ? edgePlacement : nil }
+
+    /// The paired computer's displays as it last said (JSON display list), to show where
+    /// it is while it isn't connected.
+    static var peerDisplays: [DisplayInfo] {
+        get { defaults.data(forKey: "peerDisplays").map(Displays.decode) ?? [] }
+        set { defaults.set(Displays.encode(newValue), forKey: "peerDisplays") }
     }
 
     /// Keep AWDL (AirDrop's radio hopping) off while connected.

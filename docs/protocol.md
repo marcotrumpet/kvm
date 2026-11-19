@@ -147,9 +147,10 @@ Entering control from the screen viewer, the controller sends `Enter`, `PointerA
 the cursor entered the picture) and `Confine{display, all edges}`. On `EdgeExit` it returns
 control and puts its own cursor just outside the viewer at the matching spot.
 
-Moving across: the user says which side of their Mac the other computer is on and how the
-two desktops line up (their bounding boxes, by tops, centers or bottoms), and the other
-computer's display list gives its displays' frames. When the pointer is pushed past this
+Moving across: the user drags the other computer's displays next to their Mac's in
+Settings, which gives the side it is on and where along that side its desktop's bounding box
+starts (in points, from the start of this Mac's), and the other computer's display list
+gives its displays' frames. When the pointer is pushed past this
 Mac's outer edge on that side, the controller sends `Enter`, `PointerAbs` (the matching
 spot on the peer display facing it) and `Confine{0xFFFFFFFF, the facing edge}`. The
 `EdgeExit` that comes back says which display it left from, so the controller puts its

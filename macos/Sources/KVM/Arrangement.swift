@@ -1,12 +1,12 @@
 import CoreGraphics
 
 /// Where the peer's desktop sits next to this Mac's, for moving the pointer across: on
-/// `side`, the two desktops' bounding boxes lined up by `alignment` (0: tops or left sides
-/// level, 1: bottoms or right sides level). Points map one to one across, so displays line
+/// `side`, the start of its bounding box along that side `offset` points from the start of
+/// this Mac's (top or left; nil: centered). Points map one to one across, so displays line
 /// up by how big things look on them.
 struct Arrangement {
     let side: Edge
-    let alignment: Double
+    let offset: Double?
     let local: [(id: UInt32, rect: CGRect)]
     let peer: [(id: UInt32, rect: CGRect)]
 
@@ -55,8 +55,39 @@ struct Arrangement {
     }
 
     /// What to add to a normalized peer point to put it in this Mac's normalized space.
+    /// Normalizing never mirrors the axis along the side, so `offset` applies as it is.
     private func peerShift(_ lBox: CGRect, _ pBox: CGRect) -> CGPoint {
-        CGPoint(x: lBox.maxX - pBox.minX, y: lBox.minY + (lBox.height - pBox.height) * alignment - pBox.minY)
+        CGPoint(x: lBox.maxX - pBox.minX, y: lBox.minY + (offset.map { CGFloat($0) } ?? (lBox.height - pBox.height) / 2) - pBox.minY)
+    }
+
+    // For drawing and dragging the arrangement: `local` and `peer` are the two desktops'
+    // bounding boxes, each in its own coordinates.
+
+    /// Where the peer's desktop goes in this Mac's coordinates.
+    static func placed(peer: CGRect, local: CGRect, side: Edge, offset: Double?) -> CGRect {
+        let horizontal = side == .left || side == .right
+        let along = offset.map { CGFloat($0) } ?? (horizontal ? local.height - peer.height : local.width - peer.width) / 2
+        let origin = switch side {
+        case .left: CGPoint(x: local.minX - peer.width, y: local.minY + along)
+        case .right: CGPoint(x: local.maxX, y: local.minY + along)
+        case .top: CGPoint(x: local.minX + along, y: local.minY - peer.height)
+        case .bottom: CGPoint(x: local.minX + along, y: local.maxY)
+        }
+        return CGRect(origin: origin, size: peer.size)
+    }
+
+    /// The side and offset nearest to the peer's desktop dropped at `dropped` (this Mac's
+    /// coordinates): against the side its center is most beyond, overlapping this Mac's
+    /// along it by at least a quarter of the shorter of the two.
+    static func snap(_ dropped: CGRect, local: CGRect) -> (side: Edge, offset: Double) {
+        let dx = (dropped.midX - local.midX) / (dropped.width + local.width)
+        let dy = (dropped.midY - local.midY) / (dropped.height + local.height)
+        let side: Edge = abs(dx) >= abs(dy) ? (dx < 0 ? .left : .right) : (dy < 0 ? .top : .bottom)
+        let horizontal = side == .left || side == .right
+        let (start, length, localLength) = horizontal ? (dropped.minY - local.minY, dropped.height, local.height)
+                                                      : (dropped.minX - local.minX, dropped.width, local.width)
+        let overlap = min(length, localLength) / 4
+        return (side, min(max(start, overlap - length), localLength - overlap))
     }
 
     /// Of `rects`, the one whose edge facing the other computer is at `along`: nearest along

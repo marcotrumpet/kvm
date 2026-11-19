@@ -19,8 +19,10 @@ struct SettingsView: View {
     @State private var peerID = Settings.peerID ?? ""
     @State private var peerError: String?
     @State private var hotkey = Settings.hotkey
-    @State private var edgeSide = Settings.edgeSide
-    @State private var edgeAlignment = Settings.edgeAlignment
+    @State private var edgeEnabled = Settings.edgeEnabled
+    @State private var edgePlacement = Settings.edgePlacement
+    @State private var edgeOffset = Settings.edgeOffset
+    @State private var localDisplays = Displays.current()
     @State private var recording = false
     @State private var monitor: Any?
     @State private var launchAtLogin = Settings.launchAtLogin
@@ -174,31 +176,24 @@ struct SettingsView: View {
                 Text("Press the shortcut on the computer whose keyboard you're using. Use at least one of ⌃ ⌥ ⌘.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("Other computer is", selection: $edgeSide) {
-                    Text("Not next to this Mac").tag(Edge?.none)
-                    Text("On the left").tag(Edge?.some(.left))
-                    Text("On the right").tag(Edge?.some(.right))
-                    Text("Above").tag(Edge?.some(.top))
-                    Text("Below").tag(Edge?.some(.bottom))
-                }
-                .onChange(of: edgeSide) {
-                    Settings.edgeSide = $0
-                    edgeChanged()
-                }
-                if let edgeSide {
-                    let across = edgeSide == .left || edgeSide == .right
-                    LabeledContent("Line up") {
-                        HStack {
-                            Text(across ? "Tops" : "Left sides").font(.caption)
-                            Slider(value: $edgeAlignment, in: 0...1)
-                                .onChange(of: edgeAlignment) { Settings.edgeAlignment = $0 }
-                            Text(across ? "Bottoms" : "Right sides").font(.caption)
-                        }
+                Toggle("Switch by moving the pointer to the other screen", isOn: $edgeEnabled)
+                    .onChange(of: edgeEnabled) {
+                        Settings.edgeEnabled = $0
+                        edgeChanged()
                     }
-                    Text("Push the pointer past this side of the screen to control the other computer, and back past its side to return. Hold ⌃, ⌥, ⇧ or ⌘ to stay at the edge. Set the same on the other computer, from its side.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                ArrangementView(local: localDisplays, peer: state.peerDisplays,
+                                peerName: pairing.pairedName ?? "Other computer",
+                                side: $edgePlacement, offset: $edgeOffset, enabled: edgeEnabled)
+                    .onChange(of: edgePlacement) {
+                        Settings.edgePlacement = $0
+                        edgeChanged()
+                    }
+                    .onChange(of: edgeOffset) { Settings.edgeOffset = $0 }
+                Text(state.peerDisplays.isEmpty
+                     ? "Drag the other computer's screen to where it is next to this Mac. Its displays show here once it has connected with this version."
+                     : "Drag the other computer's displays to where they are next to this Mac. Push the pointer past that edge to control it, and back to return. Hold ⌃, ⌥, ⇧ or ⌘ to stay at the edge. Arrange this Mac on the other computer too.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Wake the other computer", isOn: $wakePeer)
                     .onChange(of: wakePeer) { Settings.wakePeer = $0 }
                 Text("If it's asleep when you press the shortcut, send it a Wake-on-LAN packet (same network only; it needs \"Wake for network access\" turned on).")
@@ -336,6 +331,8 @@ struct SettingsView: View {
             inputMonitoring = Permissions.inputMonitoring
             screenRecording = Permissions.screenRecording
             awdlUp = Awdl.isUp
+            let displays = Displays.current()
+            if displays != localDisplays { localDisplays = displays }
         }
         .onDisappear(perform: stopRecording)
     }

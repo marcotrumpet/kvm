@@ -22,6 +22,8 @@ final class AppState: ObservableObject {
     @Published var sharingScreen = false
     /// This Mac is viewing the peer's screen.
     @Published var viewingPeer = false
+    /// The peer's displays, where they are (kept from the last connection).
+    @Published var peerDisplays = Settings.peerDisplays
 }
 
 /// Glues capture, injection and the core together. Input paths run on the tap thread and
@@ -144,7 +146,7 @@ final class Controller {
         guard let side = Settings.edgeSide else { return nil }
         let peer = peerDisplays.withLock { $0 }.compactMap { d in d.bounds.map { (id: d.id, rect: $0) } }
         guard !peer.isEmpty else { return nil }
-        return Arrangement(side: side, alignment: Settings.edgeAlignment, local: Displays.bounds(), peer: peer)
+        return Arrangement(side: side, offset: Settings.edgeOffset, local: Displays.bounds(), peer: peer)
     }
 
     /// Tap thread: the pointer was pushed past this Mac's edge towards the peer. Control
@@ -349,7 +351,13 @@ final class Controller {
         case .displayList(let data):
             let list = Displays.decode(data)
             peerDisplays.withLock { $0 = list }
-            DispatchQueue.main.async { self.viewer.setDisplays(list) }
+            DispatchQueue.main.async {
+                self.viewer.setDisplays(list)
+                if list.contains(where: { $0.bounds != nil }) {
+                    self.state.peerDisplays = list
+                    Settings.peerDisplays = list
+                }
+            }
         case .latency(let micros):
             let ms = Double(micros) / 1000
             let now = Date()
