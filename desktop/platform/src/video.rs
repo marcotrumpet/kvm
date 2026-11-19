@@ -147,17 +147,13 @@ pub fn unpack(payload: &[u8]) -> Option<(bool, bool, Vec<u8>)> {
 pub fn nv12_to_bgra(src: &[u8], width: usize, height: usize, stride: usize, plane_rows: usize, out: &mut Vec<u8>) {
     out.resize(width * height * 4, 0);
     let chroma = stride * plane_rows;
-    for y in 0..height {
-        let row = &src[y * stride..];
-        let uv = &src[chroma + (y / 2) * stride..];
-        let dst = &mut out[y * width * 4..(y + 1) * width * 4];
-        for x in 0..width {
-            dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], uv[x & !1], uv[(x & !1) + 1]));
-        }
+    for (y, dst) in out.chunks_exact_mut(width * 4).enumerate() {
+        let uv = &src[chroma + (y / 2) * stride..][..width.div_ceil(2) * 2];
+        yuv_row(&src[y * stride..][..width], dst, |i| (uv[2 * i], uv[2 * i + 1]));
     }
 }
 
-/// I420 (separate U and V planes, as OpenH264 decodes) to BGRA, `width` x `height`; same
+/// I420 (separate U and V planes, as the decoders give it) to BGRA, `width` x `height`; same
 /// colors as [`nv12_to_bgra`].
 #[allow(clippy::too_many_arguments)]
 pub fn i420_to_bgra(
@@ -171,14 +167,44 @@ pub fn i420_to_bgra(
     out: &mut Vec<u8>,
 ) {
     out.resize(width * height * 4, 0);
-    for y in 0..height {
-        let row = &y_plane[y * y_stride..];
-        let (u, v) = (&u_plane[(y / 2) * uv_stride..], &v_plane[(y / 2) * uv_stride..]);
-        let dst = &mut out[y * width * 4..(y + 1) * width * 4];
-        for x in 0..width {
-            dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], u[x / 2], v[x / 2]));
-        }
+    let half = width.div_ceil(2);
+    for (y, dst) in out.chunks_exact_mut(width * 4).enumerate() {
+        let (u, v) = (&u_plane[(y / 2) * uv_stride..][..half], &v_plane[(y / 2) * uv_stride..][..half]);
+        yuv_row(&y_plane[y * y_stride..][..width], dst, |i| (u[i], v[i]));
     }
+}
+
+/// One row of 4:2:0 pixels (BT.709 limited range) to BGRA; `uv(i)` is the chroma of pixels
+/// 2i and 2i + 1, worked out once for both.
+#[inline(always)]
+fn yuv_row(y: &[u8], dst: &mut [u8], uv: impl Fn(usize) -> (u8, u8)) {
+    let width = y.len();
+    for (i, (luma, px)) in y.as_chunks::<2>().0.iter().zip(dst.as_chunks_mut::<8>().0.iter_mut()).enumerate() {
+        let (u, v) = uv(i);
+        let (u, v) = (u as i32 - 128, v as i32 - 128);
+        let (r, g, b) = (459 * v + 128, -55 * u - 136 * v + 128, 541 * u + 128);
+        let c0 = (luma[0] as i32 - 16) * 298;
+        let c1 = (luma[1] as i32 - 16) * 298;
+        px.copy_from_slice(&[
+            clamp8((c0 + b) >> 8),
+            clamp8((c0 + g) >> 8),
+            clamp8((c0 + r) >> 8),
+            255,
+            clamp8((c1 + b) >> 8),
+            clamp8((c1 + g) >> 8),
+            clamp8((c1 + r) >> 8),
+            255,
+        ]);
+    }
+    if width % 2 == 1 {
+        let (u, v) = uv(width / 2);
+        dst[width * 4 - 4..].copy_from_slice(&bt709(y[width - 1], u, v));
+    }
+}
+
+#[inline(always)]
+fn clamp8(v: i32) -> u8 {
+    v.clamp(0, 255) as u8
 }
 
 /// One BT.709 limited-range pixel as BGRA.
@@ -188,7 +214,7 @@ fn bt709(y: u8, u: u8, v: u8) -> [u8; 4] {
     let r = (c + 459 * v + 128) >> 8;
     let g = (c - 55 * u - 136 * v + 128) >> 8;
     let b = (c + 541 * u + 128) >> 8;
-    [b.clamp(0, 255) as u8, g.clamp(0, 255) as u8, r.clamp(0, 255) as u8, 255]
+    [clamp8(b), clamp8(g), clamp8(r), 255]
 }
 
 /// Scales a BGRA picture to `width` x `height` (nearest pixel: the stream is asked for at
@@ -224,54 +250,49 @@ pub fn bgra_to_nv12(src: &[u8], src_w: u32, src_h: u32, stride: usize, width: u3
     let (w, h) = (width as usize, height as usize);
     out.resize(w * h + w * h / 2, 0);
     let (y_plane, uv_plane) = out.split_at_mut(w * h);
-    let xs: Vec<(usize, usize)> = (0..w)
-        .map(|x| {
-            let a = x * src_w as usize / w;
-            let b = ((x + 1) * src_w as usize / w).max(a + 1).min(src_w as usize);
-            (a, b)
-        })
-        .collect();
-    let ys: Vec<(usize, usize)> = (0..h)
-        .map(|y| {
-            let a = y * src_h as usize / h;
-            let b = ((y + 1) * src_h as usize / h).max(a + 1).min(src_h as usize);
-            (a, b)
-        })
-        .collect();
     // Average up to a 2x2 sample of each covered block: enough for screen content, and
-    // quick (the full box average costs too much at 60 fps).
-    let sample = |x0: usize, x1: usize, y0: usize, y1: usize| -> (i32, i32, i32) {
-        let (xa, xb) = (x0, if x1 - x0 > 1 { x0 + (x1 - x0) / 2 } else { x0 });
-        let (ya, yb) = (y0, if y1 - y0 > 1 { y0 + (y1 - y0) / 2 } else { y0 });
-        let mut sum = (0, 0, 0);
-        for (sx, sy) in [(xa, ya), (xb, ya), (xa, yb), (xb, yb)] {
-            let p = sy * stride + sx * 4;
-            sum.0 += src[p + 2] as i32;
-            sum.1 += src[p + 1] as i32;
-            sum.2 += src[p] as i32;
-        }
-        (sum.0 / 4, sum.1 / 4, sum.2 / 4)
+    // quick (the full box average costs too much at 60 fps). As byte offsets per column
+    // and row offsets per row; at the same size, each sample is just the pixel.
+    let taps = |n: usize, src_n: usize| -> Vec<(usize, usize)> {
+        (0..n)
+            .map(|i| {
+                let a = i * src_n / n;
+                let b = ((i + 1) * src_n / n).max(a + 1).min(src_n);
+                (a, if b - a > 1 { a + (b - a) / 2 } else { a })
+            })
+            .collect()
     };
-    let mut rgb_row = vec![(0i32, 0i32, 0i32); w];
-    let mut prev_row = vec![(0i32, 0i32, 0i32); w];
-    for (y, &(y0, y1)) in ys.iter().enumerate() {
-        for (x, &(x0, x1)) in xs.iter().enumerate() {
-            let (r, g, b) = sample(x0, x1, y0, y1);
-            rgb_row[x] = (r, g, b);
-            y_plane[y * w + x] = (16 + ((47 * r + 157 * g + 16 * b) >> 8)).clamp(16, 235) as u8;
+    let xs: Vec<(usize, usize)> = taps(w, src_w as usize).into_iter().map(|(a, b)| (a * 4, b * 4)).collect();
+    let ys = taps(h, src_h as usize);
+    let same_size = (src_w as usize, src_h as usize) == (w, h);
+    let mut rgb_row = vec![[0i32; 3]; w];
+    let mut prev_row = vec![[0i32; 3]; w];
+    for (y, &(ya, yb)) in ys.iter().enumerate() {
+        let (top, bottom) = (&src[ya * stride..], &src[yb * stride..]);
+        let luma = &mut y_plane[y * w..(y + 1) * w];
+        if same_size {
+            for ((rgb, l), px) in rgb_row.iter_mut().zip(luma.iter_mut()).zip(top.as_chunks::<4>().0) {
+                let (r, g, b) = (px[2] as i32, px[1] as i32, px[0] as i32);
+                *rgb = [r, g, b];
+                *l = (16 + ((47 * r + 157 * g + 16 * b) >> 8)).clamp(16, 235) as u8;
+            }
+        } else {
+            let px = |row: &[u8], at: usize| u32::from_le_bytes(row[at..at + 4].try_into().unwrap());
+            for ((rgb, l), &(xa, xb)) in rgb_row.iter_mut().zip(luma.iter_mut()).zip(&xs) {
+                let p = [px(top, xa), px(top, xb), px(bottom, xa), px(bottom, xb)];
+                let sum = |shift: u32| p.iter().map(|&v| (v >> shift & 0xFF) as i32).sum::<i32>();
+                let (r, g, b) = (sum(16) / 4, sum(8) / 4, sum(0) / 4);
+                *rgb = [r, g, b];
+                *l = (16 + ((47 * r + 157 * g + 16 * b) >> 8)).clamp(16, 235) as u8;
+            }
         }
         if y % 2 == 1 {
             let row = &mut uv_plane[(y / 2) * w..(y / 2) * w + w];
-            for x in (0..w).step_by(2) {
-                let mut s = (0, 0, 0);
-                for p in [prev_row[x], prev_row[x + 1], rgb_row[x], rgb_row[x + 1]] {
-                    s.0 += p.0;
-                    s.1 += p.1;
-                    s.2 += p.2;
-                }
-                let (r, g, b) = (s.0 / 4, s.1 / 4, s.2 / 4);
-                row[x] = (128 + ((-26 * r - 87 * g + 112 * b) >> 8)).clamp(16, 240) as u8;
-                row[x + 1] = (128 + ((112 * r - 102 * g - 10 * b) >> 8)).clamp(16, 240) as u8;
+            for ((uv, above), below) in row.as_chunks_mut::<2>().0.iter_mut().zip(prev_row.as_chunks::<2>().0).zip(rgb_row.as_chunks::<2>().0) {
+                let s = |c: usize| (above[0][c] + above[1][c] + below[0][c] + below[1][c]) / 4;
+                let (r, g, b) = (s(0), s(1), s(2));
+                uv[0] = (128 + ((-26 * r - 87 * g + 112 * b) >> 8)).clamp(16, 240) as u8;
+                uv[1] = (128 + ((112 * r - 102 * g - 10 * b) >> 8)).clamp(16, 240) as u8;
             }
         }
         std::mem::swap(&mut rgb_row, &mut prev_row);
@@ -281,6 +302,119 @@ pub fn bgra_to_nv12(src: &[u8], src_w: u32, src_h: u32, stride: usize, width: u3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The straightforward versions these replaced, to check them against.
+    mod reference {
+        /// NV12 (BT.709 limited range; `stride` bytes per row, chroma after `stride * plane_rows`)
+        /// to BGRA, `width` x `height`.
+        pub fn nv12_to_bgra(src: &[u8], width: usize, height: usize, stride: usize, plane_rows: usize, out: &mut Vec<u8>) {
+            out.resize(width * height * 4, 0);
+            let chroma = stride * plane_rows;
+            for y in 0..height {
+                let row = &src[y * stride..];
+                let uv = &src[chroma + (y / 2) * stride..];
+                let dst = &mut out[y * width * 4..(y + 1) * width * 4];
+                for x in 0..width {
+                    dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], uv[x & !1], uv[(x & !1) + 1]));
+                }
+            }
+        }
+
+        /// I420 (separate U and V planes, as OpenH264 decodes) to BGRA, `width` x `height`; same
+        /// colors as [`nv12_to_bgra`].
+        #[allow(clippy::too_many_arguments)]
+        pub fn i420_to_bgra(
+            y_plane: &[u8],
+            y_stride: usize,
+            u_plane: &[u8],
+            v_plane: &[u8],
+            uv_stride: usize,
+            width: usize,
+            height: usize,
+            out: &mut Vec<u8>,
+        ) {
+            out.resize(width * height * 4, 0);
+            for y in 0..height {
+                let row = &y_plane[y * y_stride..];
+                let (u, v) = (&u_plane[(y / 2) * uv_stride..], &v_plane[(y / 2) * uv_stride..]);
+                let dst = &mut out[y * width * 4..(y + 1) * width * 4];
+                for x in 0..width {
+                    dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], u[x / 2], v[x / 2]));
+                }
+            }
+        }
+
+        /// One BT.709 limited-range pixel as BGRA.
+        fn bt709(y: u8, u: u8, v: u8) -> [u8; 4] {
+            let c = (y as i32 - 16) * 298;
+            let (u, v) = (u as i32 - 128, v as i32 - 128);
+            let r = (c + 459 * v + 128) >> 8;
+            let g = (c - 55 * u - 136 * v + 128) >> 8;
+            let b = (c + 541 * u + 128) >> 8;
+            [b.clamp(0, 255) as u8, g.clamp(0, 255) as u8, r.clamp(0, 255) as u8, 255]
+        }
+
+        /// Scales a BGRA picture (rows of `stride` bytes) to `width` x `height` NV12 (BT.709,
+        /// limited range), averaging the source pixels each target pixel covers.
+        pub fn bgra_to_nv12(src: &[u8], src_w: u32, src_h: u32, stride: usize, width: u32, height: u32, out: &mut Vec<u8>) {
+            let (w, h) = (width as usize, height as usize);
+            out.resize(w * h + w * h / 2, 0);
+            let (y_plane, uv_plane) = out.split_at_mut(w * h);
+            let xs: Vec<(usize, usize)> = (0..w)
+                .map(|x| {
+                    let a = x * src_w as usize / w;
+                    let b = ((x + 1) * src_w as usize / w).max(a + 1).min(src_w as usize);
+                    (a, b)
+                })
+                .collect();
+            let ys: Vec<(usize, usize)> = (0..h)
+                .map(|y| {
+                    let a = y * src_h as usize / h;
+                    let b = ((y + 1) * src_h as usize / h).max(a + 1).min(src_h as usize);
+                    (a, b)
+                })
+                .collect();
+            // Average up to a 2x2 sample of each covered block: enough for screen content, and
+            // quick (the full box average costs too much at 60 fps).
+            let sample = |x0: usize, x1: usize, y0: usize, y1: usize| -> (i32, i32, i32) {
+                let (xa, xb) = (x0, if x1 - x0 > 1 { x0 + (x1 - x0) / 2 } else { x0 });
+                let (ya, yb) = (y0, if y1 - y0 > 1 { y0 + (y1 - y0) / 2 } else { y0 });
+                let mut sum = (0, 0, 0);
+                for (sx, sy) in [(xa, ya), (xb, ya), (xa, yb), (xb, yb)] {
+                    let p = sy * stride + sx * 4;
+                    sum.0 += src[p + 2] as i32;
+                    sum.1 += src[p + 1] as i32;
+                    sum.2 += src[p] as i32;
+                }
+                (sum.0 / 4, sum.1 / 4, sum.2 / 4)
+            };
+            let mut rgb_row = vec![(0i32, 0i32, 0i32); w];
+            let mut prev_row = vec![(0i32, 0i32, 0i32); w];
+            for (y, &(y0, y1)) in ys.iter().enumerate() {
+                for (x, &(x0, x1)) in xs.iter().enumerate() {
+                    let (r, g, b) = sample(x0, x1, y0, y1);
+                    rgb_row[x] = (r, g, b);
+                    y_plane[y * w + x] = (16 + ((47 * r + 157 * g + 16 * b) >> 8)).clamp(16, 235) as u8;
+                }
+                if y % 2 == 1 {
+                    let row = &mut uv_plane[(y / 2) * w..(y / 2) * w + w];
+                    for x in (0..w).step_by(2) {
+                        let mut s = (0, 0, 0);
+                        for p in [prev_row[x], prev_row[x + 1], rgb_row[x], rgb_row[x + 1]] {
+                            s.0 += p.0;
+                            s.1 += p.1;
+                            s.2 += p.2;
+                        }
+                        let (r, g, b) = (s.0 / 4, s.1 / 4, s.2 / 4);
+                        row[x] = (128 + ((-26 * r - 87 * g + 112 * b) >> 8)).clamp(16, 240) as u8;
+                        row[x + 1] = (128 + ((112 * r - 102 * g - 10 * b) >> 8)).clamp(16, 240) as u8;
+                    }
+                }
+                std::mem::swap(&mut rgb_row, &mut prev_row);
+            }
+        }
+
+    }
 
     #[test]
     fn splits_annex_b() {
@@ -324,6 +458,71 @@ mod tests {
                 assert!((*got as i32 - want as i32).abs() <= 6, "{px:?}");
             }
         }
+    }
+
+    /// Pseudo-random bytes, the same every run.
+    fn noise(n: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761).max(1);
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The faster conversions give exactly the old ones' bytes: odd sizes, padded rows,
+    /// scaling down, up and not at all.
+    #[test]
+    fn matches_the_reference_conversions() {
+        for (w, h) in [(2usize, 2usize), (7, 5), (64, 36), (101, 51)] {
+            let (stride, rows) = (w + 6, h + 2);
+            let src = noise(stride * rows * 3 / 2 + stride, (w * h) as u32);
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            nv12_to_bgra(&src, w, h, stride, rows, &mut a);
+            reference::nv12_to_bgra(&src, w, h, stride, rows, &mut b);
+            assert_eq!(a, b, "nv12 {w}x{h}");
+            let (u, v) = (noise(stride * rows, 1), noise(stride * rows, 2));
+            i420_to_bgra(&src, stride, &u, &v, stride / 2, w, h, &mut a);
+            reference::i420_to_bgra(&src, stride, &u, &v, stride / 2, w, h, &mut b);
+            assert_eq!(a, b, "i420 {w}x{h}");
+        }
+        for ((sw, sh), (w, h)) in [((64u32, 36u32), (64u32, 36u32)), ((100, 60), (64, 36)), ((33, 21), (64, 40)), ((1920, 1080), (1280, 720))] {
+            let stride = sw as usize * 4 + 12;
+            let src = noise(stride * sh as usize, sw * sh);
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            bgra_to_nv12(&src, sw, sh, stride, w, h, &mut a);
+            reference::bgra_to_nv12(&src, sw, sh, stride, w, h, &mut b);
+            assert_eq!(a, b, "bgra_to_nv12 {sw}x{sh} -> {w}x{h}");
+        }
+    }
+
+    /// Speeds at 1080p: cargo test --release -p kvm-platform conversion_speed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn conversion_speed() {
+        let (w, h) = (1920usize, 1080usize);
+        let src: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let (mut nv12, mut bgra, mut scaled) = (Vec::new(), Vec::new(), Vec::new());
+        let time = |name: &str, f: &mut dyn FnMut()| {
+            f();
+            let start = std::time::Instant::now();
+            for _ in 0..20 {
+                f();
+            }
+            println!("{name}: {:.2} ms", start.elapsed().as_secs_f64() * 1000.0 / 20.0);
+        };
+        time("bgra_to_nv12", &mut || bgra_to_nv12(&src, w as u32, h as u32, w * 4, w as u32, h as u32, &mut nv12));
+        time("bgra_to_nv12 to 720p", &mut || bgra_to_nv12(&src, w as u32, h as u32, w * 4, 1280, 720, &mut scaled));
+        time("(old) bgra_to_nv12 to 720p", &mut || reference::bgra_to_nv12(&src, w as u32, h as u32, w * 4, 1280, 720, &mut scaled));
+        time("nv12_to_bgra", &mut || nv12_to_bgra(&nv12, w, h, w, h, &mut bgra));
+        let (y, uv) = nv12.split_at(w * h);
+        let u: Vec<u8> = uv.iter().step_by(2).copied().collect();
+        let v: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
+        time("i420_to_bgra", &mut || i420_to_bgra(y, w, &u, &v, w / 2, w, h, &mut bgra));
+        time("scale_bgra 1080p->900p", &mut || scale_bgra(&src, w, h, 1600, 900, &mut scaled));
     }
 
     #[test]
