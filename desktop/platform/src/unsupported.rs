@@ -20,6 +20,10 @@ impl Injector {
     pub fn lock_screen(&self) {}
 }
 
+pub fn system_proxy() -> Option<String> {
+    None
+}
+
 pub mod capture {
     pub fn set_hotkey(_hotkey: crate::Hotkey) {}
     pub fn set_remote(_on: bool) {}

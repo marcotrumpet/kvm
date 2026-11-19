@@ -89,14 +89,14 @@ pub trait Delegate: Send + Sync + 'static {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{Injector, capture, clipboard, dialog, ui, updater};
+pub use windows::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{Injector, capture, clipboard, dialog, ui, updater};
+pub use linux::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
 
 #[cfg(not(any(windows, target_os = "linux")))]
 mod unsupported;
 #[cfg(not(any(windows, target_os = "linux")))]
-pub use unsupported::{Injector, capture, clipboard, dialog, ui, updater};
+pub use unsupported::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};

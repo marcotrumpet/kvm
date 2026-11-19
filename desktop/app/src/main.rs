@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use kvm_core::Node;
-use kvm_platform::{dialog, ui, updater};
+use kvm_platform::{dialog, system_proxy, ui, updater};
 
 /// Updates: the same GitHub releases and signing key as the Mac app (see macos/release.sh).
 const FEED_URL: &str = if cfg!(windows) {
@@ -44,6 +44,15 @@ fn run() -> Result<()> {
         .with_ansi(false)
         .with_writer(Mutex::new(log))
         .init();
+
+    // Relay traffic through the system's web proxy, if there is one (see core's Node::bind).
+    if std::env::var_os("HTTPS_PROXY").is_none() && std::env::var_os("HTTP_PROXY").is_none()
+        && let Some(proxy) = system_proxy()
+    {
+        tracing::info!("using the system proxy {proxy}");
+        // SAFETY: still single-threaded (no runtime yet).
+        unsafe { std::env::set_var("HTTPS_PROXY", proxy) };
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let config_dir = config::config_dir();

@@ -44,5 +44,8 @@ Name: "startup"; Description: "Start KVM when I sign in"
 Filename: "{app}\kvm.exe"; Description: "Open KVM"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\kvm.exe"; Flags: nowait; Check: WizardSilent
 
+[Messages]
+FinishedLabel=KVM is installed and lives in the notification area (the tray). If Windows asks whether KVM may use the network, allow it on private networks, so it can find your Mac directly.
+
 [UninstallRun]
 Filename: "taskkill"; Parameters: "/IM kvm.exe /F"; Flags: runhidden; RunOnceId: "StopKVM"

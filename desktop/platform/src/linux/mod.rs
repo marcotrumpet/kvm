@@ -394,6 +394,21 @@ pub mod ui {
     }
 }
 
+/// GNOME's manual proxy setting (Settings > Network > Proxy), as a URL for HTTPS_PROXY.
+/// Other desktops usually export HTTPS_PROXY themselves.
+pub fn system_proxy() -> Option<String> {
+    let get = |schema: &str, key: &str| -> Option<String> {
+        let out = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_string())
+    };
+    if get("org.gnome.system.proxy", "mode")? != "manual" {
+        return None;
+    }
+    let host = get("org.gnome.system.proxy.https", "host").filter(|h| !h.is_empty())?;
+    let port = get("org.gnome.system.proxy.https", "port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(8080);
+    Some(format!("http://{host}:{port}"))
+}
+
 /// Text on the clipboard. Use from one thread (arboard serves pastes from its own).
 pub mod clipboard {
     pub struct Clipboard(arboard::Clipboard);

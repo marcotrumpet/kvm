@@ -105,6 +105,12 @@ To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
 Pairing replaces the Mac's current other computer.
 
+Where mDNS is blocked (guest and office networks), pair by ID instead: Pair Over the
+Internet > Copy This Computer's ID, or copy the Mac's ID (KVM Settings > Pair over the
+internet) and choose Pair With the ID on the Clipboard. Behind a web proxy, the system's
+proxy setting is used (Windows' Internet Settings; GNOME's on Linux, or `HTTPS_PROXY`). If
+Windows Firewall asks, allow KVM on private networks.
+
 Windows: the installer (per user, no admin) and updates (WinSparkle, from the same GitHub
 releases and key as the Mac app) come from the release workflow.
 

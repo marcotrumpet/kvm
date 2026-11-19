@@ -9,6 +9,40 @@ pub use inject::Injector;
 /// Tags our injected events, so our own hooks let them through.
 const MARKER: usize = 0x4B56_4D21;
 
+/// The proxy set in Windows' Internet Settings (Settings > Network > Proxy), as a URL for
+/// HTTPS_PROXY: "host:port", or the https= (else http=) entry of a per-protocol list.
+pub fn system_proxy() -> Option<String> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW};
+    use windows::core::w;
+
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+    let mut enabled = 0u32;
+    let mut size = 4u32;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, key, w!("ProxyEnable"), RRF_RT_REG_DWORD, None,
+                     Some(&mut enabled as *mut u32 as *mut _), Some(&mut size))
+    };
+    if status.is_err() || enabled == 0 {
+        return None;
+    }
+    let mut buf = [0u16; 512];
+    let mut size = (buf.len() * 2) as u32;
+    let status = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, key, w!("ProxyServer"), RRF_RT_REG_SZ, None,
+                     Some(buf.as_mut_ptr() as *mut _), Some(&mut size))
+    };
+    if status.is_err() {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let server = String::from_utf16_lossy(&buf[..len]);
+    let pick = |scheme: &str| {
+        server.split(';').find_map(|part| part.strip_prefix(scheme).map(str::to_string))
+    };
+    let host = if server.contains('=') { pick("https=").or_else(|| pick("http="))? } else { server.trim().to_string() };
+    (!host.is_empty()).then(|| if host.contains("://") { host } else { format!("http://{host}") })
+}
+
 /// Text on the clipboard. Use from one thread.
 pub mod clipboard {
     pub struct Clipboard(arboard::Clipboard);

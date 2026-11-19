@@ -483,6 +483,19 @@ impl App {
             machines.push(MenuEntry::disabled("None found: open KVM Settings on the Mac"));
         }
         menu.push(MenuEntry::Submenu { label: "Pair With".into(), children: machines });
+        // Where mDNS is blocked (guest and office networks): pair by ID, through the clipboard.
+        menu.push(MenuEntry::Submenu {
+            label: "Pair Over the Internet".into(),
+            children: vec![
+                MenuEntry::item("copy-id", "Copy This Computer's ID"),
+                MenuEntry::Item {
+                    id: "pair-clipboard".into(),
+                    label: "Pair With the ID on the Clipboard".into(),
+                    enabled: s.asking.is_none(),
+                    checked: None,
+                },
+            ],
+        });
         menu.push(MenuEntry::check("pairing", "Allow Pairing (2 minutes)", s.pairing_until.is_some()));
         if config.peer_id.is_some() {
             menu.push(MenuEntry::item("unpair", format!("Unpair {peer}")));
@@ -548,6 +561,29 @@ impl Delegate for App {
                 self.refresh();
             }
             "update" => updater::check_now(),
+            "copy-id" => {
+                let _ = self.clipboard_in.send(self.node.id().to_string());
+            }
+            "pair-clipboard" => {
+                let text = kvm_platform::clipboard::Clipboard::new().ok().and_then(|mut c| c.text()).unwrap_or_default();
+                let id = text.trim().to_lowercase();
+                match id.parse::<EndpointId>() {
+                    Ok(peer) if id.len() == 64 && peer != self.node.id() => {
+                        let _rt = self.rt.enter();
+                        self.state.lock().unwrap().asking = Some(peer);
+                        self.node.request_pairing(peer, false);
+                        self.refresh();
+                        std::thread::spawn(|| {
+                            dialog::tell("KVM", "Asked the other computer to pair. Allow it there (its KVM Settings must be open) and check that both show the same code.")
+                        });
+                    }
+                    _ => {
+                        std::thread::spawn(|| {
+                            dialog::tell("KVM", "Copy the other computer's ID first: on a Mac, KVM Settings > Pair over the internet; here, Copy This Computer's ID.")
+                        });
+                    }
+                }
+            }
             "log" => open(&crate::config::log_dir().join("kvm.log")),
             "quit" => ui::quit(),
             _ => {
