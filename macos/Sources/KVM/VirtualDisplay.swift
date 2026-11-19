@@ -12,6 +12,9 @@ final class VirtualDisplay {
     private var display: CGVirtualDisplay?
     /// The physical main display, and whether it mirrors ours yet.
     private var physical: CGDirectDisplayID = 0
+    /// Its pixel area, read before it mirrors ours: mirroring changes its reported mode
+    /// (letterboxed to our shape), which made each re-fit smaller than the last.
+    private var physicalArea: CGFloat = 0
     private var mirrored = false
     /// As an extra screen: whether it was put to the right of the others yet.
     private var placed = false
@@ -37,6 +40,7 @@ final class VirtualDisplay {
         let wanted = shapeOnly ? shape(pixels.width / max(pixels.height, 1)) : VirtualDisplay.round(pixels)
         if display == nil {
             physical = CGMainDisplayID()
+            physicalArea = VirtualDisplay.pixelArea(of: physical)
             guard let created = VirtualDisplay.create(like: physical) else {
                 Log.warn("creating a virtual display failed")
                 return nil
@@ -94,10 +98,13 @@ final class VirtualDisplay {
     /// same aspect, so a viewer asking for more pixels (zooming in) doesn't re-lay out.
     private func shape(_ aspect: CGFloat) -> CGSize {
         if size != .zero, abs(size.width / size.height / aspect - 1) < 0.02 { return size }
-        let main = display == nil ? CGMainDisplayID() : physical
-        let mode = CGDisplayCopyDisplayMode(main)
-        let area = CGFloat((mode?.pixelWidth ?? 2880) * (mode?.pixelHeight ?? 1800))
+        let area = display == nil ? VirtualDisplay.pixelArea(of: CGMainDisplayID()) : physicalArea
         return VirtualDisplay.round(CGSize(width: (area * aspect).squareRoot(), height: (area / aspect).squareRoot()))
+    }
+
+    private static func pixelArea(of id: CGDirectDisplayID) -> CGFloat {
+        let mode = CGDisplayCopyDisplayMode(id)
+        return CGFloat((mode?.pixelWidth ?? 2880) * (mode?.pixelHeight ?? 1800))
     }
 
     /// For `owner`: unmirrors the display, so the physical one is the main display again,
