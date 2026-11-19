@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds KVM.app (universal: Apple Silicon + Intel) into ../dist and zips it.
 set -euo pipefail
+trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"

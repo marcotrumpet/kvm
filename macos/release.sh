@@ -6,6 +6,7 @@
 # Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
 set -euo pipefail
+trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
