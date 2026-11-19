@@ -74,6 +74,38 @@ struct VideoParams: Equatable {
     var hevc = false
     /// Also stream the host's sound.
     var audio = false
+    /// How big the host draws its main display while viewed.
+    var textSize = TextSize.standard
+}
+
+/// How big the host draws its desktop while viewed (see `VideoParams.text_size`).
+enum TextSize: UInt8, CaseIterable {
+    case standard = 0
+    case smaller = 1
+    case larger = 2
+    case largest = 3
+
+    /// Smallest to largest, for menus.
+    static let ordered: [TextSize] = [.smaller, .standard, .larger, .largest]
+
+    /// Relative to the display's default size in points.
+    var scale: CGFloat {
+        switch self {
+        case .standard: 1
+        case .smaller: 0.8
+        case .larger: 1.25
+        case .largest: 1.5
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .standard: "Default"
+        case .smaller: "Smaller"
+        case .larger: "Larger"
+        case .largest: "Largest"
+        }
+    }
 }
 
 /// How the host's main display follows the viewer (see `VideoParams.fit_host`).
@@ -306,7 +338,7 @@ final class Core {
     func requestVideo(_ p: VideoParams) {
         kvm_video_request(node, UInt16(clamping: p.maxWidth), UInt16(clamping: p.maxHeight),
                           UInt8(clamping: p.fps), UInt32(clamping: p.bitrateKbps), UInt8(p.prefer.rawValue), p.display,
-                          p.fitHost.rawValue, p.hevc ? 1 : 0, p.audio)
+                          p.fitHost.rawValue, p.hevc ? 1 : 0, p.audio, p.textSize.rawValue)
     }
 
     /// While the peer views this screen with audio: one encoded packet.
@@ -439,7 +471,8 @@ private extension CoreEvent {
                 prefer: VideoPreference(rawValue: Int((e.b >> 40) & 0xFF)) ?? .balanced,
                 display: UInt32(truncatingIfNeeded: e.a >> 32),
                 fitHost: HostFit(rawValue: UInt8(truncatingIfNeeded: e.b >> 48)) ?? .off,
-                hevc: (e.b >> 56) & 1 == 1, audio: (e.b >> 57) & 1 == 1))
+                hevc: (e.b >> 56) & 1 == 1, audio: (e.b >> 57) & 1 == 1,
+                textSize: TextSize(rawValue: UInt8(truncatingIfNeeded: (e.b >> 58) & 3)) ?? .standard))
         case KVM_EV_VIDEO_STOPPED: self = .videoStopped
         case KVM_EV_KEYFRAME_REQUESTED: self = .keyframeRequested
         case KVM_EV_VIDEO_FRAME:

@@ -15,12 +15,16 @@ final class VirtualDisplay {
     /// Its pixel area, read before it mirrors ours: mirroring changes its reported mode
     /// (letterboxed to our shape), which made each re-fit smaller than the last.
     private var physicalArea: CGFloat = 0
+    private var physicalPixels = CGSize.zero
     private var mirrored = false
     /// As an extra screen: whether it was put to the right of the others yet.
     private var placed = false
     /// Unmirrored and waiting to be removed once capture has moved off it.
     private(set) var released = false
+    /// The size asked for, its text scale, and the pixels the mode it got has.
     private var size = CGSize.zero
+    private var textScale: CGFloat = 1
+    private var backing = CGSize.zero
     private weak var owner: AnyObject?
     /// Mirrored (or an extra screen), as last asked; and a count that cancels pending retries.
     private var wantsMirror = true
@@ -33,14 +37,17 @@ final class VirtualDisplay {
     /// Creates or resizes the display for `owner` to about `pixels` (`shapeOnly`: to their
     /// aspect ratio at the physical display's pixel count) and returns its id, or nil if it
     /// could not be created.
-    /// `mirror`: the main display mirrors it; otherwise it is an extra screen.
-    func fit(to pixels: CGSize, shapeOnly: Bool, mirror: Bool = true, owner: AnyObject) -> CGDirectDisplayID? {
+    /// `mirror`: the main display mirrors it; otherwise it is an extra screen. `textScale`
+    /// draws everything that much bigger (fewer points across the same shape).
+    func fit(to pixels: CGSize, shapeOnly: Bool, mirror: Bool = true, textScale: CGFloat = 1,
+             owner: AnyObject) -> CGDirectDisplayID? {
         self.owner = owner
         released = false
         let wanted = shapeOnly ? shape(pixels.width / max(pixels.height, 1)) : VirtualDisplay.round(pixels)
         if display == nil {
             physical = CGMainDisplayID()
-            physicalArea = VirtualDisplay.pixelArea(of: physical)
+            physicalPixels = VirtualDisplay.pixels(of: physical)
+            physicalArea = physicalPixels.width * physicalPixels.height
             guard let created = VirtualDisplay.create(like: physical) else {
                 Log.warn("creating a virtual display failed")
                 return nil
@@ -50,13 +57,16 @@ final class VirtualDisplay {
             Log.info("virtual display \(created.displayID) created")
         }
         guard let display else { return nil }
-        if wanted != size {
-            guard display.apply(VirtualDisplay.settings(for: wanted)) else {
-                Log.warn("virtual display: \(Int(wanted.width))x\(Int(wanted.height)) refused")
+        if wanted != size || textScale != self.textScale {
+            let (settings, pixels) = VirtualDisplay.settings(for: wanted, textScale: textScale)
+            guard display.apply(settings) else {
+                Log.warn("virtual display: \(Int(wanted.width))x\(Int(wanted.height)) at \(textScale)x text refused")
                 return size == .zero ? nil : display.displayID
             }
             size = wanted
-            Log.info("virtual display -> \(Int(wanted.width))x\(Int(wanted.height))")
+            self.textScale = textScale
+            backing = pixels
+            Log.info("virtual display -> \(Int(pixels.width))x\(Int(pixels.height)) for \(Int(wanted.width))x\(Int(wanted.height)) at \(textScale)x text")
         }
         wantsMirror = mirror
         if mirror {
@@ -91,8 +101,9 @@ final class VirtualDisplay {
         }
     }
 
-    /// The pixel size the display was set to (zero when there is none).
-    var pixelSize: CGSize { display == nil ? .zero : size }
+    /// The pixel size the display was set to (zero when there is none). Not the size asked
+    /// for when the text is scaled: bigger text is drawn at fewer pixels and scaled up.
+    var pixelSize: CGSize { display == nil ? .zero : backing }
 
     /// The physical display's pixel area at `aspect`. Keeps the current size for about the
     /// same aspect, so a viewer asking for more pixels (zooming in) doesn't re-lay out.
@@ -102,9 +113,21 @@ final class VirtualDisplay {
         return VirtualDisplay.round(CGSize(width: (area * aspect).squareRoot(), height: (area / aspect).squareRoot()))
     }
 
+    /// For `owner`: the display at the physical main display's own size, only with bigger
+    /// or smaller text (the viewer keeps the host's resolution).
+    func fitLikeMain(textScale: CGFloat, owner: AnyObject) -> CGDirectDisplayID? {
+        let pixels = display == nil ? VirtualDisplay.pixels(of: CGMainDisplayID()) : physicalPixels
+        return fit(to: pixels, shapeOnly: false, textScale: textScale, owner: owner)
+    }
+
     private static func pixelArea(of id: CGDirectDisplayID) -> CGFloat {
+        let size = pixels(of: id)
+        return size.width * size.height
+    }
+
+    private static func pixels(of id: CGDirectDisplayID) -> CGSize {
         let mode = CGDisplayCopyDisplayMode(id)
-        return CGFloat((mode?.pixelWidth ?? 2880) * (mode?.pixelHeight ?? 1800))
+        return CGSize(width: mode?.pixelWidth ?? 2880, height: mode?.pixelHeight ?? 1800)
     }
 
     /// For `owner`: unmirrors the display, so the physical one is the main display again,
@@ -129,6 +152,7 @@ final class VirtualDisplay {
         setupGeneration += 1
         display = nil // releasing it unplugs it
         size = .zero
+        backing = .zero
         self.owner = nil
         Log.info("virtual display removed")
     }
@@ -196,16 +220,20 @@ final class VirtualDisplay {
         return CGVirtualDisplay(descriptor: descriptor)
     }
 
-    /// One mode of `pixels`. HiDPI when that still leaves a usable desktop, so text is drawn
-    /// at the viewer's scale rather than tiny.
-    private static func settings(for pixels: CGSize) -> CGVirtualDisplaySettings {
+    /// One mode for `pixels`, and the pixels it has. HiDPI when that still leaves a usable
+    /// desktop, so text is drawn at the viewer's scale rather than tiny. `textScale` divides
+    /// the points: macOS draws only at 1x or 2x, so bigger text has fewer pixels (the viewer
+    /// scales the picture up) and smaller text more.
+    private static func settings(for pixels: CGSize, textScale: CGFloat) -> (CGVirtualDisplaySettings, CGSize) {
         let hiDPI = min(pixels.width, pixels.height) >= 1080
-        let scale = hiDPI ? 2.0 : 1.0
+        let scale: CGFloat = hiDPI ? 2 : 1
+        let limit = CGFloat(maxPixels) / scale
+        func points(_ v: CGFloat) -> CGFloat { CGFloat(Int(min(v / scale / textScale, limit)) & ~1) }
+        let width = points(pixels.width), height = points(pixels.height)
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = hiDPI ? 1 : 0
-        settings.modes = [CGVirtualDisplayMode(width: UInt(pixels.width / scale), height: UInt(pixels.height / scale),
-                                               refreshRate: 60)]
-        return settings
+        settings.modes = [CGVirtualDisplayMode(width: UInt(width), height: UInt(height), refreshRate: 60)]
+        return (settings, CGSize(width: width * scale, height: height * scale))
     }
 
     /// Multiples of 4 (even in pixels and in HiDPI points), within what the display accepts.

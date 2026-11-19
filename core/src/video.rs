@@ -74,7 +74,18 @@ pub struct VideoParams {
     pub codecs: u8,
     /// Also stream the host's sound (as `Datagram::Audio`).
     pub audio: bool,
+    /// How big the host draws its main display's desktop while viewed (a macOS host does it
+    /// with a virtual display, whatever `fit_host` is): `TEXT_SIZE_*`.
+    pub text_size: u8,
 }
+
+pub const TEXT_SIZE_DEFAULT: u8 = 0;
+/// 80% of the default size: more room.
+pub const TEXT_SIZE_SMALLER: u8 = 1;
+/// 125%.
+pub const TEXT_SIZE_LARGER: u8 = 2;
+/// 150%.
+pub const TEXT_SIZE_LARGEST: u8 = 3;
 
 /// Measurements since the last rate tick.
 #[derive(Debug, Default, Clone, Copy)]

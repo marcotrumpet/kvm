@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage("pointerSpeed") private var pointerSpeed = 1.2
     @AppStorage("screenOn") private var screenOn = true
     @AppStorage("hostFit") private var hostFit = Int(Prefs.hostFit.rawValue)
+    @AppStorage("textSize") private var textSize = Int(Prefs.textSize.rawValue)
     @AppStorage("videoQuality") private var quality = VideoQuality.auto.rawValue
     @AppStorage("sound") private var sound = true
     @AppStorage("sendMicrophone") private var sendMicrophone = false
@@ -44,6 +45,11 @@ struct SettingsView: View {
                         Text("Keep its resolution").tag(Int(HostFit.off.rawValue))
                         Text("Fit it to this screen").tag(Int(HostFit.shape.rawValue))
                         Text("Use this as an extra screen").tag(Int(HostFit.extend.rawValue))
+                    }
+                    Picker("Text size", selection: $textSize) {
+                        ForEach(TextSize.ordered, id: \.rawValue) { size in
+                            Text(size.title).tag(Int(size.rawValue))
+                        }
                     }
                     Picker("Quality", selection: $quality) {
                         ForEach(VideoQuality.allCases, id: \.rawValue) { q in

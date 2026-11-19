@@ -300,7 +300,8 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
         Event::VideoRequested(p) => (
             KVM_EV_VIDEO_REQUESTED,
             ((p.display as i64) << 32) | ((p.max_width as i64) << 16) | p.max_height as i64,
-            ((p.audio as i64) << 57)
+            ((p.text_size as i64 & 3) << 58)
+                | ((p.audio as i64) << 57)
                 | ((p.codecs as i64 & 1) << 56)
                 | ((p.fit_host as i64) << 48)
                 | ((p.prefer as i64) << 40)
@@ -552,6 +553,7 @@ pub unsafe extern "C" fn kvm_video_request(
     fit_host: u8,
     codecs: u8,
     audio: bool,
+    text_size: u8,
 ) {
     with_link(node, |l| {
         l.request_video(VideoParams {
@@ -564,6 +566,7 @@ pub unsafe extern "C" fn kvm_video_request(
             fit_host,
             codecs,
             audio,
+            text_size,
         })
     })
 }

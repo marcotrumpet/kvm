@@ -125,6 +125,7 @@ final class Controller {
         params.fitHost = viewer.fitsHost ? .size : .off
         params.hevc = VideoFrames.decodesHEVC
         params.audio = Settings.viewerAudio
+        params.textSize = Settings.viewerTextSize
         return params
     }
 

@@ -348,6 +348,7 @@ impl App {
             fit_host: 0,
             codecs: 0, // H.264 only
             audio: false,
+            text_size: 0,
         };
         let _rt = self.rt.enter();
         link.request_video(params);

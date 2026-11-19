@@ -133,6 +133,12 @@ or the connection.
 (and the `main` one in the display list) for the viewer; the host's real main display is
 still there by its id.
 
+`VideoParams.text_size` (main display only) makes a macOS host draw its desktop bigger or
+smaller while viewed, so it is easier to tap or fits more: 0 default, 1 smaller (80%), 2
+larger (125%), 3 largest (150%). The host keeps the display's pixel count but changes its
+size in points, through the same virtual display; with `fit_host` 0 it is sized like the
+host's main display. Windows and Linux hosts ignore it.
+
 ### Viewer control and moving across
 
 `Confine{display, edges}` keeps the controlled side's pointer on one display, or with

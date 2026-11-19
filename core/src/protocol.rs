@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"kvm/1";
-pub const PROTOCOL_VERSION: u16 = 16;
+pub const PROTOCOL_VERSION: u16 = 17;
 
 /// Upper bound for a single control frame. Bulk data (clipboard) uses its own streams.
 const MAX_FRAME_LEN: usize = 64 * 1024;

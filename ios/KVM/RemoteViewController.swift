@@ -241,6 +241,7 @@ final class RemoteViewController: UIViewController {
         let size = CGSize(width: pixelSize.width * zoom, height: pixelSize.height * zoom)
         var params = Prefs.videoQuality.params(maxSize: size)
         params.fitHost = fitHost
+        params.textSize = Prefs.textSize
         params.hevc = VideoFrames.decodesHEVC
         params.audio = sound
         model.view(params) { [weak self] data in
@@ -488,7 +489,17 @@ final class RemoteViewController: UIViewController {
             (.extend, "Use this as an extra screen", "rectangle.on.rectangle.angled"),
         ]
         fitButton.configuration?.image = UIImage(systemName: choices.first { $0.0 == fitHost }?.2 ?? "aspectratio")
-        fitButton.menu = UIMenu(title: "Computer's screen", children: choices.map { choice in
+        let textSizes = UIMenu(title: "Text Size", image: UIImage(systemName: "textformat.size"), children: TextSize.ordered.map { size in
+            UIAction(title: size.title, state: size == Prefs.textSize ? .on : .off) { [weak self] _ in
+                guard let self, Prefs.textSize != size else { return }
+                Prefs.textSize = size
+                updateFitMenu()
+                showHint(size == .standard ? "The computer's screen is at its usual size"
+                                           : "Everything on the computer's screen is \(size.title.lowercased())")
+                if screenOn { startVideo() }
+            }
+        })
+        fitButton.menu = UIMenu(title: "Computer's screen", children: [UIMenu(options: .displayInline, children: choices.map { choice in
             UIAction(title: choice.1, image: UIImage(systemName: choice.2), state: choice.0 == fitHost ? .on : .off) { [weak self] _ in
                 guard let self, fitHost != choice.0 else { return }
                 fitHost = choice.0
@@ -504,7 +515,7 @@ final class RemoteViewController: UIViewController {
                     startVideo()
                 }
             }
-        })
+        }), textSizes])
     }
 
     private func updateDisplayMenu() {
@@ -1182,6 +1193,12 @@ enum Prefs {
             return defaults.bool(forKey: "fitHost") ? .shape : .off // the earlier on/off setting
         }
         set { defaults.set(Int(newValue.rawValue), forKey: "hostFit") }
+    }
+
+    /// How big the computer draws its main display while shown here.
+    static var textSize: TextSize {
+        get { TextSize(rawValue: UInt8(clamping: defaults.integer(forKey: "textSize"))) ?? .standard }
+        set { defaults.set(Int(newValue.rawValue), forKey: "textSize") }
     }
 
     /// Only watch the computer's screen: this device doesn't take control of it.

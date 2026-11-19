@@ -164,12 +164,18 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     private func target(for params: VideoParams) -> CGDirectDisplayID {
         let virtual = VirtualDisplay.shared
         let size = CGSize(width: params.maxWidth, height: params.maxHeight)
-        if params.fitHost == .extend, let id = virtual.fit(to: size, shapeOnly: false, mirror: false, owner: self) {
+        let textScale = params.textSize.scale
+        if params.fitHost == .extend,
+           let id = virtual.fit(to: size, shapeOnly: false, mirror: false, textScale: textScale, owner: self) {
             // The extra screen stays while the viewer looks at the others too.
             return params.display == 0 ? id : Displays.resolve(params.display)
         }
         if params.fitHost != .off, params.fitHost != .extend, params.display == 0,
-           let id = virtual.fit(to: size, shapeOnly: params.fitHost == .shape, owner: self) {
+           let id = virtual.fit(to: size, shapeOnly: params.fitHost == .shape, textScale: textScale, owner: self) {
+            return id
+        }
+        if params.fitHost == .off, params.textSize != .standard, params.display == 0,
+           let id = virtual.fitLikeMain(textScale: textScale, owner: self) {
             return id
         }
         guard stream != nil, capturedDisplay == virtual.id, let physical = virtual.release(owner: self) else {

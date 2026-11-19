@@ -130,6 +130,12 @@ enum Settings {
         set { defaults.set(newValue, forKey: "viewerResizesHost") }
     }
 
+    /// How big the peer draws its main display while viewed.
+    static var viewerTextSize: TextSize {
+        get { TextSize(rawValue: UInt8(clamping: defaults.integer(forKey: "viewerTextSize"))) ?? .standard }
+        set { defaults.set(Int(newValue.rawValue), forKey: "viewerTextSize") }
+    }
+
     /// Play the peer's sound while viewing its screen.
     static var viewerAudio: Bool {
         get { defaults.object(forKey: "viewerAudio") as? Bool ?? true }

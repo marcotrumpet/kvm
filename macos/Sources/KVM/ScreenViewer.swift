@@ -29,6 +29,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     private(set) var selectedDisplay: UInt32 = 0
     private let matchWindow = NSButton(checkboxWithTitle: "Match window size", target: nil, action: nil)
     private let resizeHost = NSButton(checkboxWithTitle: "Resize host", target: nil, action: nil)
+    private let textSizeMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
     private let hoverControl = NSButton(checkboxWithTitle: "Control on hover", target: nil, action: nil)
     private let viewOnly = NSButton(checkboxWithTitle: "View only", target: nil, action: nil)
@@ -141,6 +142,14 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         resizeHost.controlSize = .small
         resizeHost.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         resizeHost.toolTip = "Change the other computer's resolution and shape to fit this window, while viewing it"
+        textSizeMenu.removeAllItems()
+        textSizeMenu.addItems(withTitles: TextSize.ordered.map { "Text: \($0.title)" })
+        textSizeMenu.selectItem(at: TextSize.ordered.firstIndex(of: Settings.viewerTextSize) ?? 0)
+        textSizeMenu.target = self
+        textSizeMenu.action = #selector(textSizeChanged)
+        textSizeMenu.controlSize = .small
+        textSizeMenu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        textSizeMenu.toolTip = "Make everything on the other computer's main display bigger or smaller, while viewing it"
         sound.state = Settings.viewerAudio ? .on : .off
         sound.target = self
         sound.action = #selector(soundChanged)
@@ -176,7 +185,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         fullScreen.bezelStyle = .accessoryBarAction
         fullScreen.isBordered = false
         fullScreen.toolTip = "Full screen, one-to-one"
-        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, sound, hoverControl, viewOnly, spacer, stats, fullScreen])
+        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, textSizeMenu, sound, hoverControl, viewOnly, spacer, stats, fullScreen])
         bar.orientation = .horizontal
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
@@ -325,6 +334,11 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
 
     @objc private func matchWindowChanged() {
         Settings.viewerMatchesWindow = matchWindow.state == .on
+        onStreamSettingsChanged?()
+    }
+
+    @objc private func textSizeChanged() {
+        Settings.viewerTextSize = TextSize.ordered[max(textSizeMenu.indexOfSelectedItem, 0)]
         onStreamSettingsChanged?()
     }
 

@@ -14,7 +14,8 @@ real machines so far, see below), plus an iPhone and iPad app that controls a co
 - **File sharing**: drop on the menu bar icon or the viewer; permissions, links and app bundles survive.
 - **Screen viewer**: hardware HEVC or H.264, adaptive bitrate and quality, the host's sound,
   multiple displays, full-screen 1:1, view only (just watch). The host can re-lay out its desktop to the viewer's
-  size or shape, or add the viewer as an extra screen (iPad, like Sidecar).
+  size or shape, or add the viewer as an extra screen (iPad, like Sidecar), and draw
+  everything bigger or smaller while viewed (easier to tap from an iPad).
 - **Microphone**: the controlling computer's, iPhone's or iPad's microphone becomes "KVM
   Microphone" on the controlled Mac, for calls there (a small Core Audio driver).
 - **Lock and wake**: locking either Mac locks both; switching to a sleeping Mac wakes it
