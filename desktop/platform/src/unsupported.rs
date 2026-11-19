@@ -66,6 +66,19 @@ pub mod microphone {
     }
 }
 
+/// Receiving the Mac's microphone isn't available here.
+pub mod mic_feed {
+    pub struct MicFeed;
+
+    impl MicFeed {
+        pub fn new() -> Option<MicFeed> {
+            None
+        }
+        pub fn handle(&self, _payload: &[u8]) {}
+        pub fn stop(&self) {}
+    }
+}
+
 /// Viewing the peer's screen isn't available here yet.
 pub mod viewer {
     use std::sync::Arc;

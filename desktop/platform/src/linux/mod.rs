@@ -3,7 +3,7 @@
 //! without libei and portals).
 
 mod keymap;
-#[cfg_attr(not(feature = "opus"), allow(dead_code))] // checkable without libopus
+#[cfg_attr(not(feature = "opus"), allow(dead_code))] // capture is only used with libopus
 pub mod mic;
 #[cfg(feature = "h264")]
 pub mod screen;

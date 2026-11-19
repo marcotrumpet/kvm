@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent};
 use kvm_platform::screen::ScreenHost;
 use kvm_platform::video::{ScreenParams, display_list_json};
+use kvm_platform::mic_feed::MicFeed;
 use kvm_platform::microphone::{self, Microphone};
 use kvm_platform::viewer::{self, ViewerEvent};
 use kvm_platform::{Delegate, Injector, Input, MenuEntry, capture, dialog, screen, ui, updater};
@@ -45,6 +46,9 @@ pub struct App {
     screen: Mutex<Option<(ScreenHost, bool)>>,
     /// This computer's microphone, going to the peer while controlling it (if wanted).
     microphone: Mutex<Option<Microphone>>,
+    /// The controlling Mac's (or iPhone's) microphone, as this computer's "KVM Microphone"
+    /// (Linux, with FFmpeg and pactl).
+    mic_feed: Mutex<Option<MicFeed>>,
     state: Mutex<State>,
     injector: Injector,
     /// Clipboard text received from the peer, to set on the clipboard thread.
@@ -107,6 +111,7 @@ impl App {
             remotes: Mutex::new(None),
             screen: Mutex::new(None),
             microphone: Mutex::new(None),
+            mic_feed: Mutex::new(MicFeed::new()),
             injector: Injector::default(),
             clipboard_in,
             clipboard_rx: Mutex::new(Some(clipboard_rx)),
@@ -230,6 +235,7 @@ impl App {
             Event::Consumer { usage, down } if controlling() => self.injector.consumer(usage, down),
             Event::Text(text) if controlling() => self.injector.text(&text),
             Event::PointerAbs { x, y, display } if controlling() => self.injector.warp(x, y, display),
+            Event::Microphone(payload) if controlling() => self.feed_microphone(&payload),
             Event::Clipboard(payload) => {
                 if let Some(text) = clipboard::decode_text(&payload) {
                     let _ = self.clipboard_in.send(ClipboardIn::Text(text));
@@ -547,6 +553,7 @@ impl App {
             Event::Consumer { usage, down } if controlled() => self.injector.consumer(usage, down),
             Event::Text(text) if controlled() => self.injector.text(&text),
             Event::PointerAbs { x, y, display } if controlled() => self.injector.warp(x, y, display),
+            Event::Microphone(payload) if controlled() => self.feed_microphone(&payload),
             Event::VideoFrame { payload, .. } => viewer::frame(payload),
             Event::Clipboard(payload) => {
                 if self.config.lock().unwrap().share_clipboard {
@@ -819,8 +826,20 @@ impl App {
         }
     }
 
-    /// Starts or stops sending the microphone: on while controlling the peer, if wanted.
+    /// The controller's microphone, while it controls this computer.
+    fn feed_microphone(&self, payload: &[u8]) {
+        if let Some(feed) = self.mic_feed.lock().unwrap().as_ref() {
+            feed.handle(payload);
+        }
+    }
+
+    /// Starts or stops sending the microphone (on while controlling the peer, if wanted),
+    /// and silences the received one once nothing controls this computer.
     fn update_microphone(&self) {
+        let controlled = self.mode() == Mode::Controlled || self.state.lock().unwrap().remote_controlling.is_some();
+        if !controlled && let Some(feed) = self.mic_feed.lock().unwrap().as_ref() {
+            feed.stop();
+        }
         let want = self.config.lock().unwrap().send_microphone && self.mode() == Mode::Controlling;
         let mut current = self.microphone.lock().unwrap();
         if !want {
@@ -960,6 +979,7 @@ impl App {
         self.release_remote();
         self.screen.lock().unwrap().take();
         self.microphone.lock().unwrap().take();
+        self.mic_feed.lock().unwrap().take(); // removes the KVM Microphone devices
         updater::stop();
     }
 }

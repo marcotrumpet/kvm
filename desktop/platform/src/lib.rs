@@ -99,6 +99,10 @@ mod mic_encoder;
 pub mod microphone;
 #[cfg(not(all(any(windows, target_os = "linux"), feature = "opus")))]
 pub use unsupported::microphone;
+#[cfg(target_os = "linux")]
+pub mod mic_feed;
+#[cfg(not(target_os = "linux"))]
+pub use unsupported::mic_feed;
 
 #[cfg(any(all(target_os = "linux", feature = "h264"), test))]
 pub mod h264;
@@ -118,8 +122,7 @@ pub use linux::screen;
 pub use unsupported::screen;
 
 /// Stand-ins: everything on macOS (it has its own app); screen sharing on Linux without the
-/// h264 feature, and the microphone without the opus feature.
-#[cfg(any(not(windows), not(feature = "opus")))]
+/// h264 feature, sending the microphone without the opus feature, receiving it on Windows.
 mod unsupported;
 #[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater, viewer};

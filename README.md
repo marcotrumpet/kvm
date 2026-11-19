@@ -122,7 +122,10 @@ Linux screen can be shared too (X11 capture, encoded with OpenH264), and Linux c
 Mac's screen the same way when FFmpeg is installed (see below). Send Microphone While
 Controlling (tray menu) makes this computer's microphone the Mac's "KVM Microphone" while
 you control the Mac (Opus; needs the Mac app's microphone driver, Settings > Microphone,
-and a Mac app from this version on; on Linux, PulseAudio or PipeWire).
+and a Mac app from this version on; on Linux, PulseAudio or PipeWire). The other way, on
+Linux, the controlling Mac's or iPhone's microphone becomes "KVM Microphone" here, a source
+call apps can choose (made with `pactl` at startup, decoded with FFmpeg; not on Windows,
+which would need an audio driver).
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
