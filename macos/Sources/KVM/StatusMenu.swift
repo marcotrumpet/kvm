@@ -162,10 +162,20 @@ final class StatusMenu: NSObject, NSMenuDelegate, NSWindowDelegate {
         }
         menu.addItem(.separator())
 
+        let updates = Updates.shared
+        let update = NSMenuItem(title: updates.available.map { "Install Update (KVM \($0))…" } ?? "Check for Updates…",
+                                action: updates.canCheck || updates.available != nil ? #selector(checkForUpdates) : nil,
+                                keyEquivalent: "")
+        update.target = self
+        menu.addItem(update)
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
         menu.addItem(withTitle: "Quit KVM", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    @objc private func checkForUpdates() {
+        Updates.shared.checkNow()
     }
 
     @objc private func chooseFiles() {

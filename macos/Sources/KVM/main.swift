@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         Log.info("KVM \(version) started: accessibility=\(Permissions.accessibility) inputMonitoring=\(Permissions.inputMonitoring)")
         Permissions.resetStaleGrants()
+        Updates.shared.start()
         controller = Controller(core: core)
         remotes = RemoteHost(core: Core(remotesOf: core))
         menu = StatusMenu(controller: controller, awdl: awdl, openSettings: { [unowned self] in showSettings() })

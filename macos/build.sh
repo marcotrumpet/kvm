@@ -6,7 +6,11 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 DIST="$ROOT/dist"
 APP="$DIST/KVM.app"
-VERSION="0.15.0"
+VERSION="${VERSION:-0.16.0}"
+# Sparkle updates: release.sh publishes appcast.xml with each GitHub release; the key pair
+# was made with Sparkle's generate_keys (private half in the login keychain).
+FEED_URL="https://github.com/marcotrumpet/kvm/releases/latest/download/appcast.xml"
+SPARKLE_PUBLIC_KEY="uTJI1jCYearLasko0mLDJI9aF2fec64AWr13pneHktA="
 
 source "$HOME/.cargo/env" 2>/dev/null || true
 
@@ -54,12 +58,20 @@ lipo -create \
 
 echo "==> Swift app"
 swift build -c release --arch arm64 --arch x86_64
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/KVM"
+PRODUCTS="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+BIN="$PRODUCTS/KVM"
 
 echo "==> Bundle"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/KVM"
+ditto "$PRODUCTS/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+# Not sandboxed, so Sparkle's XPC services aren't needed. Inside out: its helpers, then it.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
+for part in "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "$SPARKLE"; do
+    codesign --force --sign "$SIGN_ID" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} "$part"
+done
 cp "$ROOT/target/universal/kvm-awdl-helper" "$APP/Contents/Resources/kvm-awdl-helper"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns" # icon/make-icon.swift
 codesign --force --sign "$SIGN_ID" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} --identifier "com.marcogaletta.kvm.awdl-helper" \
@@ -82,6 +94,9 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>NSLocalNetworkUsageDescription</key><string>KVM connects directly to your other computer on the local network.</string>
     <key>NSBonjourServices</key><array><string>_kvm._udp</string></array>
     <key>NSAppleEventsUsageDescription</key><string>KVM installs its Wi-Fi helper with your administrator password.</string>
+    <key>SUFeedURL</key><string>$FEED_URL</string>
+    <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key><true/>
 </dict>
 </plist>
 EOF
@@ -107,15 +122,20 @@ d = json.load(sys.stdin)
 print(" ", d.get("statusSummary"))
 for i in d.get("issues") or []:
     print("  -", i.get("path"), ":", i.get("message"))'
-            exit 1
+            # ALLOW_UNNOTARIZED=1 (release.sh): still usable by Macs that have KVM already,
+            # since Sparkle's downloads aren't quarantined; a first download is blocked.
+            [ "${ALLOW_UNNOTARIZED:-0}" = 1 ] || exit 1
+            echo "warning: continuing without notarization (ALLOW_UNNOTARIZED=1)"
+        else
+            xcrun stapler staple KVM.app
+            rm -f KVM-macos.zip
+            ditto -c -k --keepParent KVM.app KVM-macos.zip
+            spctl --assess --type execute --verbose KVM.app
         fi
-        xcrun stapler staple KVM.app
-        rm -f KVM-macos.zip
-        ditto -c -k --keepParent KVM.app KVM-macos.zip
-        spctl --assess --type execute --verbose KVM.app
     else
         echo "warning: Developer ID signed but not notarized: no '$NOTARY_PROFILE' notarytool profile"
     fi
 fi
 echo "==> $APP"
 echo "==> $DIST/KVM-macos.zip"
+

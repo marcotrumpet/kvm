@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var lockTogether = Settings.lockTogether
     @State private var wakePeer = Settings.wakePeer
     @State private var showControlIndicator = Settings.showControlIndicator
+    @State private var autoUpdate = Updates.shared.automaticallyChecks
     @State private var shareClipboard = Settings.shareClipboard
     @State private var clipboardFileLimit = Settings.clipboardFileLimit
     @State private var downloadDirectory = Settings.downloadDirectory
@@ -240,6 +241,14 @@ struct SettingsView: View {
                 Text("A panel at the top right while another computer or a phone controls or views this Mac, with a button to take it back.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Check for updates automatically", isOn: $autoUpdate)
+                    .onChange(of: autoUpdate) { Updates.shared.automaticallyChecks = $0 }
+                HStack {
+                    Text("Version \(Updates.shared.version)").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Check Now") { Updates.shared.checkNow() }
+                        .disabled(!Updates.shared.canCheck)
+                }
             }
 
             Section("Permissions") {
