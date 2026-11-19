@@ -1,8 +1,10 @@
 #!/bin/bash
 # Publishes a KVM release that installed copies update to (Sparkle): builds with build.sh,
-# signs the zip with the update key in the login keychain, writes appcast.xml and creates
+# signs the zip with the update key (see below), writes appcast.xml and creates
 # the GitHub release v<VERSION> with both. Bump VERSION in build.sh and commit first.
 #   macos/release.sh ["notes, one item per line"]    (default: commit subjects since the last release)
+# Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
+# secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -17,7 +19,7 @@ SPARKLE_DIR="$ROOT/target/sparkle"
 
 [ -n "$VERSION" ] || { echo "error: no VERSION in build.sh"; exit 1; }
 git -C "$ROOT" diff --quiet HEAD || { echo "error: commit your changes first (the release is built from HEAD)"; exit 1; }
-if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+if [ "${PUBLISH:-1}" = 1 ] && gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     echo "error: $TAG is already released; bump VERSION in build.sh"
     exit 1
 fi
@@ -45,7 +47,11 @@ VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
 
 echo "==> Appcast"
 # Prints: sparkle:edSignature="..." length="..."
-SIGNATURE="$("$SPARKLE_DIR/bin/sign_update" "$DIST/KVM-macos.zip")"
+if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
+    SIGNATURE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$DIST/KVM-macos.zip")"
+else
+    SIGNATURE="$("$SPARKLE_DIR/bin/sign_update" "$DIST/KVM-macos.zip")"
+fi
 VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$SIGNATURE" \
 URL="https://github.com/$REPO/releases/download/$TAG/KVM-macos.zip" python3 - > "$DIST/appcast.xml" <<'EOF'
 import email.utils, html, os
@@ -67,6 +73,11 @@ print(f"""<?xml version="1.0" encoding="utf-8"?>
   </channel>
 </rss>""")
 EOF
+
+if [ "${PUBLISH:-1}" != 1 ]; then
+    echo "==> Not publishing (PUBLISH=0): $DIST/KVM-macos.zip, $DIST/appcast.xml"
+    exit 0
+fi
 
 echo "==> GitHub release $TAG"
 gh release create "$TAG" "$DIST/KVM-macos.zip" "$DIST/appcast.xml" --repo "$REPO" \
