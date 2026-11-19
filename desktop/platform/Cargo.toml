@@ -9,6 +9,7 @@ anyhow = "1.0.104"
 
 [target.'cfg(windows)'.dependencies]
 tracing = "0.1.44"
+opus = { version = "0.4", optional = true } # the microphone, for the Mac
 arboard = { version = "3.7", default-features = false }
 libloading = "0.9"
 tray-icon = "0.26"
@@ -18,8 +19,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
@@ -36,6 +39,7 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tracing = "0.1.44"
+opus = { version = "0.4", optional = true } # the microphone, for the Mac
 openh264 = { version = "=0.9.9", optional = true } # H.264 for sharing the screen (Linux has no system encoder)
 arboard = { version = "3.7", default-features = false }
 ksni = { version = "0.3", features = ["blocking"] }
@@ -43,11 +47,15 @@ libloading = "0.9" # the system's FFmpeg, for viewing the peer's screen
 x11rb = { version = "0.13", features = ["randr", "xfixes", "xtest"] }
 
 [features]
-default = ["h264"]
-# OpenH264 (C++) for Linux screen sharing. Off for checking Linux from another OS, which
-# has no C++ compiler for it: cargo check --target x86_64-unknown-linux-gnu --no-default-features
+default = ["h264", "opus"]
+# OpenH264 (C++) for Linux screen sharing, and libopus (C, built with CMake) for sending the
+# microphone. Off for checking Windows or Linux from another OS, which can't build them:
+# cargo check --target x86_64-unknown-linux-gnu --no-default-features
 h264 = ["dep:openh264"]
+opus = ["dep:opus"]
 
 [dev-dependencies]
 openh264 = "=0.9.9" # the software encoder's tests run anywhere
 libloading = "0.9" # so do the FFmpeg decoder's, where FFmpeg is installed
+opus = "0.4" # and the microphone encoder's
+tracing = "0.1.44"

@@ -51,6 +51,21 @@ pub mod screen {
     }
 }
 
+/// Sending the microphone isn't available here.
+pub mod microphone {
+    pub fn supported() -> bool {
+        false
+    }
+
+    pub struct Microphone;
+
+    impl Microphone {
+        pub fn start(_on_payload: Box<dyn FnMut(Vec<u8>) + Send>) -> Option<Microphone> {
+            None
+        }
+    }
+}
+
 /// Viewing the peer's screen isn't available here yet.
 pub mod viewer {
     use std::sync::Arc;

@@ -6,7 +6,9 @@ import os
 ///
 /// Payload: `kind: u8 | bytes`. Kind 0 carries the encoder's magic cookie (sent before the
 /// first packet and every couple of seconds, so a viewer can start or recover at any
-/// time); kind 1 one encoded packet. Lost packets are just skipped.
+/// time); kind 1 one encoded packet. Lost packets are just skipped. Kind 2 is one Opus
+/// packet (48 kHz stereo, 10 ms), from senders without AAC-ELD: the Windows and Linux apps'
+/// microphones.
 enum AudioStream {
     static let sampleRate = 48_000.0
     static let channels: AVAudioChannelCount = 2
@@ -24,8 +26,18 @@ enum AudioStream {
         return AVAudioFormat(streamDescription: &asbd)!
     }()
 
+    static let opus: AVAudioFormat = {
+        var asbd = AudioStreamBasicDescription()
+        asbd.mSampleRate = sampleRate
+        asbd.mFormatID = kAudioFormatOpus
+        asbd.mChannelsPerFrame = channels
+        asbd.mFramesPerPacket = 480
+        return AVAudioFormat(streamDescription: &asbd)!
+    }()
+
     static let cookieKind: UInt8 = 0
     static let packetKind: UInt8 = 1
+    static let opusKind: UInt8 = 2
 }
 
 /// Host side: captured sample buffers in, payloads out. Use from one queue.
@@ -114,6 +126,7 @@ final class AudioPlayer: @unchecked Sendable {
     private let node = AVAudioPlayerNode()
     private var decoder: AVAudioConverter?
     private var cookie: Data?
+    private var opusDecoder: AVAudioConverter?
     private var playing = false
     /// Frames scheduled and not yet played.
     private let queued = OSAllocatedUnfairLock(initialState: 0)
@@ -147,6 +160,7 @@ final class AudioPlayer: @unchecked Sendable {
             halt()
             decoder = nil
             cookie = nil
+            opusDecoder = nil
         }
     }
 
@@ -168,15 +182,20 @@ final class AudioPlayer: @unchecked Sendable {
             cookie = Data(body)
             return
         }
-        guard kind == AudioStream.packetKind, let decoder, !body.isEmpty else { return }
+        if kind == AudioStream.opusKind, opusDecoder == nil {
+            opusDecoder = AVAudioConverter(from: AudioStream.opus, to: AudioStream.pcm)
+        }
+        let (format, converter) = kind == AudioStream.opusKind
+            ? (AudioStream.opus, opusDecoder)
+            : (AudioStream.compressed, kind == AudioStream.packetKind ? decoder : nil)
+        guard let converter, !body.isEmpty else { return }
         guard queued.withLock({ $0 }) < AudioPlayer.maxFrames else { return } // running late: skip
-        guard let pcm = decode(Data(body), with: decoder) else { return }
+        guard let pcm = decode(Data(body), format: format, with: converter) else { return }
         schedule(pcm)
     }
 
-    private func decode(_ packet: Data, with decoder: AVAudioConverter) -> AVAudioPCMBuffer? {
-        let input = AVAudioCompressedBuffer(format: AudioStream.compressed, packetCapacity: 1,
-                                            maximumPacketSize: packet.count)
+    private func decode(_ packet: Data, format: AVAudioFormat, with decoder: AVAudioConverter) -> AVAudioPCMBuffer? {
+        let input = AVAudioCompressedBuffer(format: format, packetCapacity: 1, maximumPacketSize: packet.count)
         packet.withUnsafeBytes { raw in input.data.copyMemory(from: raw.baseAddress!, byteCount: packet.count) }
         input.byteLength = UInt32(packet.count)
         input.packetCount = 1

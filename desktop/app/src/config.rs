@@ -22,6 +22,9 @@ pub struct Config {
     pub lock_together: bool,
     /// The viewer only shows the peer's screen: clicking it doesn't take control.
     pub view_only: bool,
+    /// This computer's microphone goes to the Mac while controlling it ("KVM Microphone"
+    /// there, for calls).
+    pub send_microphone: bool,
     pub hotkey: HotkeyConfig,
 }
 
@@ -35,6 +38,7 @@ impl Default for Config {
             swap_ctrl_cmd: true,
             lock_together: true,
             view_only: false,
+            send_microphone: false,
             hotkey: HotkeyConfig::from(Hotkey::DEFAULT),
         }
     }

@@ -105,7 +105,9 @@ datagrams there is no sound.
 
 The other way, the controller may send its microphone while it controls the receiver
 (after `Enter`, before `Leave`): `Datagram::Microphone`, same payloads as `Audio` (mono
-input on both channels). The core sends it only while controlling and passes it on only
+input on both channels). Senders without an AAC-ELD encoder (the Windows and Linux apps)
+use kind 2 instead: one Opus packet, 48 kHz stereo, 10 ms (480 frames), no cookie. Receivers
+skip kinds they don't know. The core sends it only while controlling and passes it on only
 while controlled. A macOS receiver plays it into the hidden output device of its "KVM
 Microphone" driver, which loops it into the "KVM Microphone" input that call apps use.
 

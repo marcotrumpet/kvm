@@ -34,7 +34,7 @@ real machines so far, see below), plus an iPhone and iPad app that controls a co
 | `macos/Microphone/` | "KVM Microphone" Core Audio driver (C): a hidden output device looped into an input for call apps. |
 | `ios/` | iPhone/iPad remote control (Xcode project); shares `Core.swift` and `VideoFrames.swift` with `macos/`. |
 | `desktop/app/` | Windows and Linux tray app in Rust, straight on the core: pairing, control, clipboard. |
-| `desktop/platform/` | Its OS layer (Windows: hooks, SendInput, WinSparkle; Linux: X11 grabs, XTest, StatusNotifierItem tray), kept free of the core so `cargo check -p kvm-platform --target x86_64-pc-windows-msvc` (or `x86_64-unknown-linux-gnu`) works anywhere. |
+| `desktop/platform/` | Its OS layer (Windows: hooks, SendInput, WinSparkle; Linux: X11 grabs, XTest, StatusNotifierItem tray), kept free of the core so `cargo check -p kvm-platform --no-default-features --target x86_64-pc-windows-msvc` (or `x86_64-unknown-linux-gnu`) works anywhere (the default features build C libraries: OpenH264, libopus). |
 | `desktop/windows/`, `desktop/linux/` | Inno Setup installer script; Linux install script and desktop entry. |
 | `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |
@@ -119,7 +119,10 @@ the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation 
 display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
 … Screen in the tray; click the picture to control the Mac there, unless View Only is on). The
 Linux screen can be shared too (X11 capture, encoded with OpenH264), and Linux can show the
-Mac's screen the same way when FFmpeg is installed (see below). Not yet: the microphone.
+Mac's screen the same way when FFmpeg is installed (see below). Send Microphone While
+Controlling (tray menu) makes this computer's microphone the Mac's "KVM Microphone" while
+you control the Mac (Opus; needs the Mac app's microphone driver, Settings > Microphone,
+and a Mac app from this version on; on Linux, PulseAudio or PipeWire).
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.

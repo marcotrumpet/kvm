@@ -2,6 +2,8 @@ mod inject;
 mod keymap;
 
 pub mod capture;
+#[cfg_attr(not(feature = "opus"), allow(dead_code))] // checkable without libopus
+pub mod mic;
 pub mod screen;
 pub mod ui;
 pub mod viewer;

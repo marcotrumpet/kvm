@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent};
 use kvm_platform::screen::ScreenHost;
 use kvm_platform::video::{ScreenParams, display_list_json};
+use kvm_platform::microphone::{self, Microphone};
 use kvm_platform::viewer::{self, ViewerEvent};
 use kvm_platform::{Delegate, Injector, Input, MenuEntry, capture, dialog, screen, ui, updater};
 use tokio::runtime::Handle;
@@ -42,6 +43,8 @@ pub struct App {
     remotes: Mutex<Option<Arc<Link>>>,
     /// This screen, shared with a viewer: the paired computer's (false) or a remote's (true).
     screen: Mutex<Option<(ScreenHost, bool)>>,
+    /// This computer's microphone, going to the peer while controlling it (if wanted).
+    microphone: Mutex<Option<Microphone>>,
     state: Mutex<State>,
     injector: Injector,
     /// Clipboard text received from the peer, to set on the clipboard thread.
@@ -103,6 +106,7 @@ impl App {
             link: Mutex::new(None),
             remotes: Mutex::new(None),
             screen: Mutex::new(None),
+            microphone: Mutex::new(None),
             injector: Injector::default(),
             clipboard_in,
             clipboard_rx: Mutex::new(Some(clipboard_rx)),
@@ -815,8 +819,36 @@ impl App {
         }
     }
 
-    /// Rebuilds the tray menu from the current state.
+    /// Starts or stops sending the microphone: on while controlling the peer, if wanted.
+    fn update_microphone(&self) {
+        let want = self.config.lock().unwrap().send_microphone && self.mode() == Mode::Controlling;
+        let mut current = self.microphone.lock().unwrap();
+        if !want {
+            if current.take().is_some() {
+                info!("microphone off");
+            }
+            return;
+        }
+        if current.is_some() {
+            return;
+        }
+        let me = self.me.clone();
+        *current = Microphone::start(Box::new(move |payload| {
+            if let Some(app) = me.upgrade()
+                && let Some(link) = app.link()
+            {
+                let _rt = app.rt.enter();
+                link.send_microphone(payload);
+            }
+        }));
+        if current.is_some() {
+            info!("microphone on");
+        }
+    }
+
+    /// Rebuilds the tray menu from the current state (and follows it with the microphone).
     fn refresh(&self) {
+        self.update_microphone();
         let config = self.config.lock().unwrap().clone();
         let status = self.status();
         let hotkey = kvm_platform::Hotkey::from(config.hotkey).label();
@@ -909,6 +941,9 @@ impl App {
         menu.push(MenuEntry::check("clipboard", "Share Clipboard", config.share_clipboard));
         menu.push(MenuEntry::check("swap", "Mac's Command Key Is Ctrl", config.swap_ctrl_cmd));
         menu.push(MenuEntry::check("lock", "Lock Both Screens Together", config.lock_together));
+        if microphone::supported() {
+            menu.push(MenuEntry::check("microphone", "Send Microphone While Controlling", config.send_microphone));
+        }
         if updater::available() {
             menu.push(MenuEntry::item("update", "Check for Updates…"));
         }
@@ -924,6 +959,7 @@ impl App {
         self.release_control();
         self.release_remote();
         self.screen.lock().unwrap().take();
+        self.microphone.lock().unwrap().take();
         updater::stop();
     }
 }
@@ -965,12 +1001,13 @@ impl Delegate for App {
                 self.set_pairing_mode(on);
             }
             "unpair" => self.unpair(),
-            "clipboard" | "swap" | "lock" | "view-only" => {
+            "clipboard" | "swap" | "lock" | "view-only" | "microphone" => {
                 let mut config = self.config.lock().unwrap();
                 let setting = match id {
                     "clipboard" => &mut config.share_clipboard,
                     "swap" => &mut config.swap_ctrl_cmd,
                     "view-only" => &mut config.view_only,
+                    "microphone" => &mut config.send_microphone,
                     _ => &mut config.lock_together,
                 };
                 *setting = !*setting;
