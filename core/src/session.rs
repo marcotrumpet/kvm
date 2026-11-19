@@ -75,14 +75,14 @@ pub enum Event {
     VideoFrame { payload: Vec<u8>, keyframe: bool },
     /// Move the pointer to this point on a display (0: main; fractions scaled to 0..=65535).
     PointerAbs { x: u16, y: u16, display: u32 },
-    /// The peer's displays, while viewing its screen.
+    /// The peer's displays (on connecting and when they change).
     DisplayList(Vec<u8>),
-    /// While controlled: keep the pointer on this display and report edge exits
-    /// (`protocol::NO_DISPLAY`: no confinement).
-    Confine { display: u32 },
-    /// While controlling: the peer's pointer was pushed past an edge of the display we
-    /// confined it to. Typically: return control here.
-    EdgeExit { edge: u8, along: u16 },
+    /// While controlled: keep the pointer on this display (`protocol::NO_DISPLAY`: the whole
+    /// desktop) and report pushes past `edges` (`protocol::EDGE_*` bits).
+    Confine { display: u32, edges: u8 },
+    /// While controlling: the peer's pointer was pushed past an edge we asked about, on
+    /// `display`. Typically: return control here.
+    EdgeExit { edge: u8, along: u16, display: u32 },
     /// Heartbeat lost: held inputs were released and, if this machine was controlling the
     /// peer, control is back to local.
     Stalled,
@@ -368,26 +368,25 @@ impl Session {
         }
     }
 
-    /// While controlling: confines the peer's pointer to one of its displays and asks for
-    /// edge exits (`protocol::NO_DISPLAY` to lift it).
-    pub fn confine(&self, display: u32) {
+    /// While controlling: confines the peer's pointer to one of its displays
+    /// (`protocol::NO_DISPLAY`: its desktop) and asks for exits past `edges`
+    /// (`protocol::EDGE_*`; `NO_DISPLAY` and 0 lift it).
+    pub fn confine(&self, display: u32, edges: u8) {
         if self.is_controlling() {
-            self.shared.send(Control::Confine { display });
+            self.shared.send(Control::Confine { display, edges });
         }
     }
 
-    /// While controlled and confined: the pointer was pushed past an edge.
-    pub fn edge_exit(&self, edge: u8, along: u16) {
+    /// While controlled and confined: the pointer was pushed past an edge of `display`.
+    pub fn edge_exit(&self, edge: u8, along: u16, display: u32) {
         if self.shared.rx.lock().unwrap().controlled {
-            self.shared.send(Control::EdgeExit { edge, along });
+            self.shared.send(Control::EdgeExit { edge, along, display });
         }
     }
 
-    /// Tells the viewer which displays this machine has (while it views our screen).
+    /// Tells the peer which displays this machine has and where they are.
     pub fn send_display_list(&self, list: Vec<u8>) {
-        if self.shared.hosting.load(Ordering::Acquire) {
-            self.shared.send(Control::DisplayList(list));
-        }
+        self.shared.send(Control::DisplayList(list));
     }
 
     pub fn send_wheel(&self, dx: i16, dy: i16) {
@@ -588,20 +587,18 @@ async fn control_loop(shared: Arc<Shared>, mut recv: RecvStream) {
                     let _ = events.send(Event::PointerAbs { x, y, display });
                 }
             }
-            Control::Confine { display } => {
+            Control::Confine { display, edges } => {
                 if shared.rx.lock().unwrap().controlled {
-                    let _ = events.send(Event::Confine { display });
+                    let _ = events.send(Event::Confine { display, edges });
                 }
             }
-            Control::EdgeExit { edge, along } => {
+            Control::EdgeExit { edge, along, display } => {
                 if shared.controlling.load(Ordering::Acquire) {
-                    let _ = events.send(Event::EdgeExit { edge, along });
+                    let _ = events.send(Event::EdgeExit { edge, along, display });
                 }
             }
             Control::DisplayList(list) => {
-                if shared.viewing.load(Ordering::Acquire) {
-                    let _ = events.send(Event::DisplayList(list));
-                }
+                let _ = events.send(Event::DisplayList(list));
             }
             Control::Wheel { dx, dy, motion } => {
                 let mut rx = shared.rx.lock().unwrap();

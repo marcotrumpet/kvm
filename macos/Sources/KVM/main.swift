@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         return "\(error)"
                     }
                 },
+                edgeChanged: { [unowned self] in controller.updateEdge() },
                 setSendMicrophone: { [unowned self] on in
                     Settings.sendMicrophone = on
                     controller.updateMicrophone()

@@ -218,7 +218,7 @@ final class AppModel: ObservableObject {
         videoParams = nil
         displays = []
         core?.stopVideo()
-        core?.confine(display: UInt32.max) // without a picture, the pointer roams freely
+        core?.confine(display: UInt32.max, edges: 0) // without a picture, the pointer roams freely
     }
 
     /// With several displays, keep the pointer on the one shown, so it can't vanish off the
@@ -226,7 +226,7 @@ final class AppModel: ObservableObject {
     private func confineToViewedDisplay() {
         guard videoParams != nil, displays.count > 1,
               let shown = displays.first(where: { selectedDisplay == 0 ? $0.main : $0.id == selectedDisplay }) else { return }
-        core?.confine(display: shown.id)
+        core?.confine(display: shown.id, edges: Edge.all)
     }
 
     /// The pointer was pushed past an edge of the display shown: follow it onto the display
@@ -326,7 +326,7 @@ final class AppModel: ObservableObject {
                 if selectedDisplay != 0, !list.contains(where: { $0.id == selectedDisplay }) { selectedDisplay = 0 }
                 confineToViewedDisplay()
             }
-        case .edgeExit(let edge, let along):
+        case .edgeExit(let edge, let along, _):
             DispatchQueue.main.async { self.edgeExit(edge: edge, along: along) }
         case .clipboard(let payload):
             DispatchQueue.main.async { Clipboard.write(payload) }

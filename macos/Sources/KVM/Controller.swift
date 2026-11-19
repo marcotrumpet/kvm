@@ -40,8 +40,17 @@ final class Controller {
     private let indicator = ControlIndicator()
     private let injector = Injector()
     private let mode = OSAllocatedUnfairLock(initialState: Mode.local)
-    /// Control was taken from the screen viewer (confined to the viewed display).
-    private let viaViewer = OSAllocatedUnfairLock(initialState: false)
+    /// How control of the peer was taken: it decides what an edge exit does.
+    private enum Entry {
+        case hotkey
+        /// From the screen viewer (confined to the viewed display).
+        case viewer
+        /// Moving the pointer past this Mac's edge (confined to the peer's desktop).
+        case edge
+    }
+    private let entry = OSAllocatedUnfairLock(initialState: Entry.hotkey)
+    /// The peer's displays, as it last told us.
+    private let peerDisplays = OSAllocatedUnfairLock(initialState: [DisplayInfo]())
     private let latency = OSAllocatedUnfairLock(initialState: (ema: 0.0, published: Date.distantPast))
 
     init(core: Core) {
@@ -72,13 +81,16 @@ final class Controller {
         viewer.onClick = { [unowned self] point in controlFromViewer(at: point) }
         // Turning view only on while controlling from the viewer hands control back.
         viewer.onViewOnlyChanged = { [unowned self] in
-            if Settings.viewerViewOnly, viaViewer.withLock({ $0 }) { returnToLocal(notifyPeer: true) }
+            if Settings.viewerViewOnly, entry.withLock({ $0 }) == .viewer { returnToLocal(notifyPeer: true) }
         }
         viewer.onPictureMoved = { [unowned self] in updateHoverRect() }
         capture.onHoverEnter = { [unowned self] location in
             DispatchQueue.main.async { self.hoverEntered(at: location) }
         }
-        injector.onEdgeExit = { [unowned self] edge, along in self.core.edgeExit(edge: edge, along: along) }
+        capture.onEdgePush = { [unowned self] point in crossToPeer(leaving: point) }
+        injector.onEdgeExit = { [unowned self] edge, along, display in
+            self.core.edgeExit(edge: edge, along: along, display: display)
+        }
         viewer.onDecodeFailure = { [unowned self] in self.core.requestVideo(videoParams()) }
         viewer.onStreamSettingsChanged = { [unowned self] in
             if !Settings.viewerAudio { audio.stop() }
@@ -116,9 +128,38 @@ final class Controller {
 
     /// Displays plugged in, removed or rearranged. Main thread.
     private func screensChanged() {
-        guard state.sharingScreen else { return }
+        updateEdge()
+        guard state.connected else { return }
         core.sendDisplayList(Displays.encode(Displays.current()))
-        screenHost.displaysChanged()
+        if state.sharingScreen { screenHost.displaysChanged() }
+    }
+
+    /// Main thread: tell the event tap whether and where to watch for moving across.
+    func updateEdge() {
+        capture.setEdge(side: state.connected ? Settings.edgeSide : nil, displays: Displays.bounds().map(\.rect))
+    }
+
+    /// Both desktops side by side, if the peer has said where its displays are. Any thread.
+    private func arrangement() -> Arrangement? {
+        guard let side = Settings.edgeSide else { return nil }
+        let peer = peerDisplays.withLock { $0 }.compactMap { d in d.bounds.map { (id: d.id, rect: $0) } }
+        guard !peer.isEmpty else { return nil }
+        return Arrangement(side: side, alignment: Settings.edgeAlignment, local: Displays.bounds(), peer: peer)
+    }
+
+    /// Tap thread: the pointer was pushed past this Mac's edge towards the peer. Control
+    /// goes across, the peer's pointer starting at the matching spot on its facing edge.
+    private func crossToPeer(leaving point: CGPoint) {
+        guard mode.withLock({ $0 }) == .local, core.isConnected else { return }
+        guard let arrangement = arrangement(), let start = arrangement.entry(leaving: point) else {
+            Log.warn("can't move across: the other computer hasn't said where its displays are")
+            return
+        }
+        controlPeer()
+        guard mode.withLock({ $0 }) == .controllingPeer else { return }
+        entry.withLock { $0 = .edge }
+        core.pointerAbs(x: start.x, y: start.y, display: start.display)
+        core.confine(display: UInt32.max, edges: arrangement.side.opposite.mask)
     }
 
     func stopViewing() {
@@ -146,9 +187,9 @@ final class Controller {
             controlPeer()
         }
         guard mode.withLock({ $0 }) == .controllingPeer else { return }
-        viaViewer.withLock { $0 = true }
+        entry.withLock { $0 = .viewer }
         core.pointerAbs(x: point.x, y: point.y, display: viewer.selectedDisplay)
-        core.confine(display: viewer.selectedDisplay)
+        core.confine(display: viewer.selectedDisplay, edges: Edge.all)
     }
 
     func toggle() {
@@ -194,7 +235,8 @@ final class Controller {
         guard switched else { return }
         capture.endRemote()
         capture.disarmHover()
-        viaViewer.withLock { $0 = false }
+        capture.disarmEdge()
+        entry.withLock { $0 = .hotkey }
         if notifyPeer { core.leave() }
         Cursor.attach()
         Log.info("back to this Mac")
@@ -249,6 +291,7 @@ final class Controller {
             Log.info("peer asked to view this screen")
             DispatchQueue.main.async {
                 self.screenHost.start(params)
+                // Again: starting may have added or resized a display for the viewer.
                 self.core.sendDisplayList(Displays.encode(Displays.current()))
             }
         case .videoStopped:
@@ -286,14 +329,27 @@ final class Controller {
             DispatchQueue.main.async { self.stopViewing() }
         case .pointerAbs(let x, let y, let display):
             if mode.withLock({ $0 }) == .controlledByPeer { injector.warp(x: x, y: y, display: display) }
-        case .confine(let display):
-            if mode.withLock({ $0 }) == .controlledByPeer { injector.confine(display: display) }
-        case .edgeExit(let edge, let along):
-            guard viaViewer.withLock({ $0 }) else { break }
-            returnToLocal(notifyPeer: true)
-            DispatchQueue.main.async { self.viewer.placeCursorOutside(edge: edge, along: along) }
+        case .confine(let display, let edges):
+            if mode.withLock({ $0 }) == .controlledByPeer { injector.confine(display: display, edges: edges) }
+        case .edgeExit(let edge, let along, let display):
+            switch entry.withLock({ $0 }) {
+            case .viewer:
+                returnToLocal(notifyPeer: true)
+                DispatchQueue.main.async { self.viewer.placeCursorOutside(edge: edge, along: along) }
+            case .edge:
+                let back = arrangement()?.returnPoint(display: display, along: along)
+                returnToLocal(notifyPeer: true)
+                if let back {
+                    CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
+                    CGWarpMouseCursorPosition(back)
+                }
+            case .hotkey:
+                break
+            }
         case .displayList(let data):
-            DispatchQueue.main.async { self.viewer.setDisplays(Displays.decode(data)) }
+            let list = Displays.decode(data)
+            peerDisplays.withLock { $0 = list }
+            DispatchQueue.main.async { self.viewer.setDisplays(list) }
         case .latency(let micros):
             let ms = Double(micros) / 1000
             let now = Date()
@@ -313,6 +369,8 @@ final class Controller {
                 self.state.stalled = false
                 self.clipboard.connected = true
                 self.updateHoverRect()
+                self.updateEdge()
+                self.core.sendDisplayList(Displays.encode(Displays.current()))
                 if let mac = Wake.macAddress() { self.core.sendWakeAddress(mac) }
                 if self.state.viewingPeer {
                     self.viewer.setStatus("Waiting for the screen…")
@@ -331,8 +389,10 @@ final class Controller {
             returnToLocal(notifyPeer: false)
             releaseControl()
             latency.withLock { $0.ema = 0 }
+            peerDisplays.withLock { $0 = [] }
             DispatchQueue.main.async {
                 self.state.connected = false
+                self.updateEdge()
                 self.state.direct = nil
                 self.state.latencyMs = nil
                 self.state.stalled = false

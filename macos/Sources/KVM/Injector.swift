@@ -8,32 +8,37 @@ final class Injector {
 
     private let source = CGEventSource(stateID: .hidSystemState)
     private var position = CGPoint.zero
-    private var displays: [CGRect] = []
+    private var displays: [(id: CGDirectDisplayID, rect: CGRect)] = []
     private var buttons: Set<Int> = []
     private var keys: Set<UInt16> = []
     private var modifiers: Set<UInt16> = []
     private var lastClick: (button: Int, time: TimeInterval, at: CGPoint, count: Int64)?
     /// When control came from the peer's screen viewer: the display the pointer is kept on
-    /// (as the peer named it, resolved on each move since displays come and go and resize),
-    /// and how far it has been pushed past an edge.
+    /// (as the peer named it, resolved on each move since displays come and go and resize;
+    /// nil: anywhere on the desktop), the edges pushing past which is reported (`Edge`
+    /// masks; on the whole desktop only its outer edges), and how far it has been pushed.
     private var confined: UInt32?
+    private var exitEdges: UInt8 = 0
     private var overshoot = CGPoint.zero
     private var exitReported = false
     /// How far past an edge (points) counts as leaving, not just reaching it.
     private static let exitPush: CGFloat = 40
-    /// Core thread: pushed past an edge of the confining display (edge 0 left, 1 right,
-    /// 2 top, 3 bottom; `along` it as a fraction 0...65535).
-    var onEdgeExit: ((Int, UInt16) -> Void)?
+    /// Core thread: pushed past an edge (0 left, 1 right, 2 top, 3 bottom) of a display (its
+    /// id), `along` it as a fraction 0...65535.
+    var onEdgeExit: ((Int, UInt16, UInt32) -> Void)?
 
     func begin() {
         position = CGEvent(source: nil)?.location ?? .zero
-        displays = Injector.activeDisplays()
+        displays = Displays.bounds()
         confined = nil
+        exitEdges = 0
     }
 
-    /// Keeps the pointer on `display` and reports pushes past its edges (`UInt32.max`: off).
-    func confine(display: UInt32) {
+    /// Keeps the pointer on `display` (`UInt32.max`: the whole desktop) and reports pushes
+    /// past `edges`.
+    func confine(display: UInt32, edges: UInt8) {
         confined = display == UInt32.max ? nil : display
+        exitEdges = edges
         overshoot = .zero
         exitReported = false
     }
@@ -42,6 +47,7 @@ final class Injector {
     /// stalls; this is a second line of defense.
     func end() {
         confined = nil
+        exitEdges = 0
         for vk in keys { postKey(vk: vk, down: false) }
         keys.removeAll()
         modifiers.removeAll()
@@ -52,9 +58,13 @@ final class Injector {
     func move(dx: Int64, dy: Int64) {
         let target = CGPoint(x: position.x + CGFloat(dx), y: position.y + CGFloat(dy))
         if let confined {
-            position = confine(target, to: CGDisplayBounds(Displays.resolve(confined)))
+            let id = Displays.resolve(confined)
+            position = confine(target, to: CGDisplayBounds(id), id: id, outerOnly: false)
         } else {
             position = clamp(target)
+            if exitEdges != 0, let d = displays.first(where: { $0.rect.contains(position) }) {
+                _ = confine(target, to: d.rect, id: d.id, outerOnly: true)
+            }
         }
         let type: CGEventType
         let button: CGMouseButton
@@ -236,20 +246,24 @@ final class Injector {
         e.post(tap: .cghidEventTap)
     }
 
-    /// Clamps to the confining display, accumulating pushes past its edges until they count
-    /// as leaving. Not while dragging: dropping something at the edge isn't leaving.
-    private func confine(_ p: CGPoint, to r: CGRect) -> CGPoint {
+    /// Clamps to display `r`, accumulating pushes past its edges until they count as
+    /// leaving, if `exitEdges` has that edge (and with `outerOnly`, nothing is beyond it).
+    /// Not while dragging: dropping something at the edge isn't leaving.
+    private func confine(_ p: CGPoint, to r: CGRect, id: CGDirectDisplayID, outerOnly: Bool) -> CGPoint {
         let clamped = CGPoint(x: min(max(p.x, r.minX), r.maxX - 1), y: min(max(p.y, r.minY), r.maxY - 1))
         let pushX = p.x - clamped.x, pushY = p.y - clamped.y
         // Keep accumulating only while pushing the same way; moving back along resets.
         overshoot.x = pushX == 0 ? 0 : (overshoot.x.sign == pushX.sign ? overshoot.x : 0) + pushX
         overshoot.y = pushY == 0 ? 0 : (overshoot.y.sign == pushY.sign ? overshoot.y : 0) + pushY
         if !exitReported, buttons.isEmpty, max(abs(overshoot.x), abs(overshoot.y)) >= Injector.exitPush {
-            exitReported = true
             let horizontal = abs(overshoot.x) >= abs(overshoot.y)
-            let edge = horizontal ? (overshoot.x < 0 ? 0 : 1) : (overshoot.y < 0 ? 2 : 3)
-            let fraction = horizontal ? (clamped.y - r.minY) / r.height : (clamped.x - r.minX) / r.width
-            onEdgeExit?(edge, UInt16(clamping: Int((min(max(fraction, 0), 1) * 65535).rounded())))
+            let edge: Edge = horizontal ? (overshoot.x < 0 ? .left : .right) : (overshoot.y < 0 ? .top : .bottom)
+            if exitEdges & edge.mask != 0,
+               !outerOnly || Displays.isOuter(clamped, of: r, edge: edge, among: displays.map(\.rect)) {
+                exitReported = true
+                let fraction = horizontal ? (clamped.y - r.minY) / r.height : (clamped.x - r.minX) / r.width
+                onEdgeExit?(edge.rawValue, UInt16(clamping: Int((min(max(fraction, 0), 1) * 65535).rounded())), id)
+            }
         }
         return clamped
     }
@@ -257,25 +271,16 @@ final class Injector {
     /// Keeps the cursor on a display: inside one as-is, otherwise clamped into the display
     /// it was on, so it can't get lost in the gaps of an uneven multi-monitor layout.
     private func clamp(_ p: CGPoint) -> CGPoint {
-        if displays.contains(where: { $0.contains(p) }) { return p }
+        if displays.contains(where: { $0.rect.contains(p) }) { return p }
         // Maybe the layout changed since control began (a display resized to the viewer's
         // shape, added or removed): look again before holding the pointer back.
-        displays = Injector.activeDisplays()
-        if displays.contains(where: { $0.contains(p) }) { return p }
-        let current = displays.first(where: { $0.contains(position) }) ?? displays.first ?? .zero
+        displays = Displays.bounds()
+        if displays.contains(where: { $0.rect.contains(p) }) { return p }
+        let current = displays.first(where: { $0.rect.contains(position) })?.rect ?? displays.first?.rect ?? .zero
         return CGPoint(
             x: min(max(p.x, current.minX), current.maxX - 1),
             y: min(max(p.y, current.minY), current.maxY - 1)
         )
     }
 
-    static func displayBounds() -> [CGRect] { activeDisplays() }
-
-    private static func activeDisplays() -> [CGRect] {
-        var count: UInt32 = 0
-        CGGetActiveDisplayList(0, nil, &count)
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetActiveDisplayList(count, &ids, &count)
-        return ids.prefix(Int(count)).map(CGDisplayBounds)
-    }
 }

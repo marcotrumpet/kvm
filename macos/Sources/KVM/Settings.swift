@@ -33,6 +33,20 @@ enum Settings {
         }
     }
 
+    /// The side of this Mac the paired computer is on, for moving the pointer across (nil:
+    /// only the shortcut and the viewer switch).
+    static var edgeSide: Edge? {
+        get { (defaults.object(forKey: "edgeSide") as? Int).flatMap(Edge.init) }
+        set { defaults.set(newValue?.rawValue, forKey: "edgeSide") }
+    }
+
+    /// How the two desktops line up along that side: 0 tops (or left sides) level, 1
+    /// bottoms (or right sides), 0.5 centered.
+    static var edgeAlignment: Double {
+        get { defaults.object(forKey: "edgeAlignment") as? Double ?? 0.5 }
+        set { defaults.set(newValue, forKey: "edgeAlignment") }
+    }
+
     /// Keep AWDL (AirDrop's radio hopping) off while connected.
     static var pauseAwdl: Bool {
         get { defaults.bool(forKey: "pauseAwdl") }

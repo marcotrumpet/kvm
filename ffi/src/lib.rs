@@ -317,8 +317,10 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
         Event::PointerAbs { x, y, display } => {
             (KVM_EV_POINTER_ABS, ((*display as i64) << 16) | *x as i64, *y as i64, false)
         }
-        Event::Confine { display } => (KVM_EV_CONFINE, *display as i64, 0, false),
-        Event::EdgeExit { edge, along } => (KVM_EV_EDGE_EXIT, *edge as i64, *along as i64, false),
+        Event::Confine { display, edges } => (KVM_EV_CONFINE, *display as i64, *edges as i64, false),
+        Event::EdgeExit { edge, along, display } => {
+            (KVM_EV_EDGE_EXIT, ((*display as i64) << 8) | *edge as i64, *along as i64, false)
+        }
         Event::DisplayList(list) => {
             data = list;
             (KVM_EV_DISPLAY_LIST, 0, 0, false)
@@ -652,20 +654,22 @@ pub unsafe extern "C" fn kvm_pointer_abs(node: *const KvmNode, x: u16, y: u16, d
     with_link(node, |l| l.pointer_abs(x, y, display))
 }
 
-/// While controlling: keeps the peer's pointer on one of its displays and asks it to report
-/// edge exits (KVM_EV_EDGE_EXIT); 0xFFFFFFFF lifts the confinement.
+/// While controlling: keeps the peer's pointer on one of its displays (0xFFFFFFFF: on its
+/// whole desktop) and asks it to report pushes past `edges` (bit 0 left, 1 right, 2 top,
+/// 3 bottom) with KVM_EV_EDGE_EXIT. 0xFFFFFFFF with edges 0 lifts the confinement.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kvm_confine(node: *const KvmNode, display: u32) {
-    with_link(node, |l| l.confine(display))
+pub unsafe extern "C" fn kvm_confine(node: *const KvmNode, display: u32, edges: u8) {
+    with_link(node, |l| l.confine(display, edges))
 }
 
-/// While controlled and confined: tells the controller the pointer was pushed past an edge.
+/// While controlled and confined: tells the controller the pointer was pushed past an edge
+/// of `display`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kvm_edge_exit(node: *const KvmNode, edge: u8, along: u16) {
-    with_link(node, |l| l.edge_exit(edge, along))
+pub unsafe extern "C" fn kvm_edge_exit(node: *const KvmNode, edge: u8, along: u16, display: u32) {
+    with_link(node, |l| l.edge_exit(edge, along, display))
 }
 
-/// While the peer views this screen: tells it which displays there are (JSON, see docs).
+/// Tells the peer which displays there are and where (JSON, see docs).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kvm_send_display_list(node: *const KvmNode, data: *const u8, len: usize) {
     if data.is_null() {

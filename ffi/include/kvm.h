@@ -32,10 +32,11 @@ enum {
     KVM_EV_VIDEO_BITRATE = 19, // encode at a = kbit/s from now on (adapted to the link)
 
     KVM_EV_CLIPBOARD = 30,    // data/data_len = clipboard payload from the peer
-    KVM_EV_DISPLAY_LIST = 36, // data/data_len = the viewed peer's displays (JSON)
-    KVM_EV_CONFINE = 37,      // controlled: keep the pointer on display a (0xFFFFFFFF: anywhere)
-    KVM_EV_EDGE_EXIT = 38,    // controlling: peer pointer pushed past edge a (0 left, 1 right,
-                              // 2 top, 3 bottom) at b = 0..65535 along it
+    KVM_EV_DISPLAY_LIST = 36, // data/data_len = the peer's displays (JSON)
+    KVM_EV_CONFINE = 37,      // controlled: keep the pointer on display a (0xFFFFFFFF: the desktop),
+                              // report pushes past the edges in b (bit 0 left, 1 right, 2 top, 3 bottom)
+    KVM_EV_EDGE_EXIT = 38,    // controlling: peer pointer pushed past edge a & 0xFF (0 left, 1 right,
+                              // 2 top, 3 bottom) of display a >> 8, at b = 0..65535 along it
     KVM_EV_TEXT = 39,         // controlled: type text (layout-independent)
     KVM_EV_GESTURE = 40,      // controlled: a = kind << 8 | phase, b = value (see kvm_send_gesture)
     KVM_EV_AUDIO = 41,        // viewing with audio: data/data_len = one encoded packet of the peer's sound
@@ -129,8 +130,8 @@ bool kvm_video_can_send(const KvmNode *node); // ask before encoding; skip the f
 bool kvm_video_send_frame(const KvmNode *node, const uint8_t *data, size_t len, bool keyframe); // copies data
 void kvm_pointer_abs(const KvmNode *node, uint16_t x, uint16_t y, uint32_t display);
 void kvm_send_display_list(const KvmNode *node, const uint8_t *data, size_t len);
-void kvm_confine(const KvmNode *node, uint32_t display); // 0xFFFFFFFF: not confined
-void kvm_edge_exit(const KvmNode *node, uint8_t edge, uint16_t along);
+void kvm_confine(const KvmNode *node, uint32_t display, uint8_t edges); // 0xFFFFFFFF, 0: not confined
+void kvm_edge_exit(const KvmNode *node, uint8_t edge, uint16_t along, uint32_t display);
 void kvm_audio_send(const KvmNode *node, const uint8_t *data, size_t len); // copies data; dropped without datagrams
 void kvm_microphone_send(const KvmNode *node, const uint8_t *data, size_t len); // while controlling; like kvm_audio_send
 

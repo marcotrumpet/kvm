@@ -542,12 +542,12 @@ impl Link {
         self.with(|s| s.pointer_abs(x, y, display))
     }
 
-    pub fn confine(&self, display: u32) {
-        self.with(|s| s.confine(display))
+    pub fn confine(&self, display: u32, edges: u8) {
+        self.with(|s| s.confine(display, edges))
     }
 
-    pub fn edge_exit(&self, edge: u8, along: u16) {
-        self.with(|s| s.edge_exit(edge, along))
+    pub fn edge_exit(&self, edge: u8, along: u16, display: u32) {
+        self.with(|s| s.edge_exit(edge, along, display))
     }
 
     pub fn send_display_list(&self, list: Vec<u8>) {

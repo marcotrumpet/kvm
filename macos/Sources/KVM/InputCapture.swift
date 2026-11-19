@@ -58,6 +58,13 @@ final class InputCapture {
         /// take control. Re-armed only once the pointer has been seen outside it.
         var hoverRect: CGRect?
         var hoverArmed = false
+        /// Moving the pointer across: the side of this Mac the peer is on (nil: off), this
+        /// Mac's displays, and how far the pointer has been pushed past that side. Re-armed
+        /// only once the pointer has been seen off the edge.
+        var edgeSide: Edge?
+        var edgeDisplays: [CGRect] = []
+        var edgePush = 0.0
+        var edgeArmed = false
         /// Unforwardable keys already logged, so each is reported once.
         var loggedUnknown: Set<Int> = []
         /// The three-finger swipe in progress: direction (1 horizontal, 2 vertical) and how far.
@@ -72,6 +79,32 @@ final class InputCapture {
     var onHotkey: (() -> Void)?
     /// Called on the tap thread when the pointer enters the viewer's picture (global point).
     var onHoverEnter: ((CGPoint) -> Void)?
+    /// Called on the tap thread when the pointer is pushed past this Mac's edge towards the
+    /// peer (the point on the edge where it left).
+    var onEdgePush: ((CGPoint) -> Void)?
+    /// How far past the edge (points) counts as leaving, not just reaching it.
+    private static let edgePushToLeave = 40.0
+    /// Pushes this close to an end of the edge (hot corners, the menu bar's corner) don't count.
+    private static let edgeCornerMargin: CGFloat = 24
+
+    /// Main thread: which side of this Mac the peer is on (nil: don't move across), and
+    /// this Mac's displays. Call again when they change.
+    func setEdge(side: Edge?, displays: [CGRect]) {
+        state.withLock {
+            if $0.edgeSide != side { $0.edgeArmed = false }
+            $0.edgeSide = side
+            $0.edgeDisplays = displays
+            $0.edgePush = 0
+        }
+    }
+
+    /// Back from the peer: don't go straight back until the pointer has left the edge.
+    func disarmEdge() {
+        state.withLock {
+            $0.edgeArmed = false
+            $0.edgePush = 0
+        }
+    }
 
     /// Main thread: where the viewer's picture is, or nil to stop watching.
     func setHoverRect(_ rect: CGRect?) {
@@ -186,7 +219,10 @@ final class InputCapture {
         }
 
         guard state.withLock({ $0.remote }) else {
-            if type == .mouseMoved { watchHover(event.location) }
+            if type == .mouseMoved {
+                watchHover(event.location)
+                watchEdge(event)
+            }
             return pass
         }
         if type.rawValue == MediaKeys.systemDefinedType {
@@ -224,6 +260,41 @@ final class InputCapture {
             return true
         }
         if entered { onHoverEnter?(location) }
+    }
+
+    /// macOS holds the cursor at the screen's edge, so pushes past it show only in the
+    /// event's deltas. Holding a modifier keeps the pointer here, for work at the edge.
+    private func watchEdge(_ event: CGEvent) {
+        let p = event.location
+        let dx = event.getDoubleValueField(.mouseEventDeltaX), dy = event.getDoubleValueField(.mouseEventDeltaY)
+        let pushed = state.withLock { s -> Bool in
+            guard let side = s.edgeSide, let r = s.edgeDisplays.first(where: { $0.contains(p) }) else { return false }
+            let (atEdge, push): (Bool, Double) = switch side {
+            case .left: (p.x < r.minX + 1, -dx)
+            case .right: (p.x >= r.maxX - 1, dx)
+            case .top: (p.y < r.minY + 1, -dy)
+            case .bottom: (p.y >= r.maxY - 1, dy)
+            }
+            guard atEdge, Displays.isOuter(p, of: r, edge: side, among: s.edgeDisplays) else {
+                s.edgeArmed = true
+                s.edgePush = 0
+                return false
+            }
+            let m = InputCapture.edgeCornerMargin
+            let ends = side == .left || side == .right ? [CGPoint(x: p.x, y: p.y - m), CGPoint(x: p.x, y: p.y + m)]
+                                                       : [CGPoint(x: p.x - m, y: p.y), CGPoint(x: p.x + m, y: p.y)]
+            guard s.edgeArmed, push >= 0, event.flags.intersection(Hotkey.relevantFlags).isEmpty,
+                  ends.allSatisfy({ e in s.edgeDisplays.contains { $0.contains(e) } }) else {
+                s.edgePush = 0
+                return false
+            }
+            s.edgePush += push
+            guard s.edgePush >= InputCapture.edgePushToLeave else { return false }
+            s.edgePush = 0
+            s.edgeArmed = false
+            return true
+        }
+        if pushed { onEdgePush?(p) }
     }
 
     private func logUnknown(_ id: Int, _ what: String) {

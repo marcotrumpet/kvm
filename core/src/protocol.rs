@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"kvm/1";
-pub const PROTOCOL_VERSION: u16 = 15;
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// Upper bound for a single control frame. Bulk data (clipboard) uses its own streams.
 const MAX_FRAME_LEN: usize = 64 * 1024;
@@ -69,14 +69,17 @@ pub enum Control {
     /// Move the pointer to a point on one of the receiver's displays (0: main), as
     /// fractions of its size scaled to 0..=65535 (used when clicking into the viewer).
     PointerAbs { x: u16, y: u16, display: u32 },
-    /// The host's displays, sent to the viewer; format up to the apps (see docs).
+    /// The sender's displays and where they are; format up to the apps (see docs). Sent on
+    /// connecting and whenever they change.
     DisplayList(Vec<u8>),
-    /// While controlled: keep the pointer on this display (`NO_DISPLAY`: anywhere) and
-    /// report pushing past its edge with `EdgeExit`. Used when control came from the viewer.
-    Confine { display: u32 },
-    /// Controlled side to controller: the pointer was pushed past an edge of the confining
-    /// display (0 left, 1 right, 2 top, 3 bottom), `along` it at a fraction 0..=65535.
-    EdgeExit { edge: u8, along: u16 },
+    /// While controlled: keep the pointer on this display (`NO_DISPLAY`: anywhere on the
+    /// desktop) and report pushing past the edges in `edges` (`EDGE_*` bits) with
+    /// `EdgeExit`. On the whole desktop only its outer edges count; `edges` 0 reports none.
+    Confine { display: u32, edges: u8 },
+    /// Controlled side to controller: the pointer was pushed past an edge (0 left, 1 right,
+    /// 2 top, 3 bottom) of `display` (its id, as in the display list), `along` it at a
+    /// fraction 0..=65535.
+    EdgeExit { edge: u8, along: u16, display: u32 },
     /// Text to type as-is, whatever the receiver's keyboard layout (from a phone's
     /// on-screen keyboard, which has no key positions to send).
     Text(String),
@@ -140,6 +143,13 @@ pub async fn read_msg<T: DeserializeOwned>(recv: &mut iroh::endpoint::RecvStream
 
 /// `Confine` value for "not confined".
 pub const NO_DISPLAY: u32 = u32::MAX;
+
+/// `Confine` edges, one bit per `EdgeExit` edge.
+pub const EDGE_LEFT: u8 = 1 << 0;
+pub const EDGE_RIGHT: u8 = 1 << 1;
+pub const EDGE_TOP: u8 = 1 << 2;
+pub const EDGE_BOTTOM: u8 = 1 << 3;
+pub const EDGE_ALL: u8 = 0x0F;
 
 /// First byte of every unidirectional stream: what it carries.
 pub const STREAM_VIDEO: u8 = 0;

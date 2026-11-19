@@ -12,11 +12,15 @@ struct SettingsView: View {
     let setPauseAwdl: (Bool) -> Bool
     /// Returns an error message on failure.
     let uninstallAwdlHelper: () -> String?
+    /// The arrangement for moving the pointer across changed.
+    let edgeChanged: () -> Void
     let setSendMicrophone: (Bool) -> Void
 
     @State private var peerID = Settings.peerID ?? ""
     @State private var peerError: String?
     @State private var hotkey = Settings.hotkey
+    @State private var edgeSide = Settings.edgeSide
+    @State private var edgeAlignment = Settings.edgeAlignment
     @State private var recording = false
     @State private var monitor: Any?
     @State private var launchAtLogin = Settings.launchAtLogin
@@ -170,6 +174,31 @@ struct SettingsView: View {
                 Text("Press the shortcut on the computer whose keyboard you're using. Use at least one of ⌃ ⌥ ⌘.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Picker("Other computer is", selection: $edgeSide) {
+                    Text("Not next to this Mac").tag(Edge?.none)
+                    Text("On the left").tag(Edge?.some(.left))
+                    Text("On the right").tag(Edge?.some(.right))
+                    Text("Above").tag(Edge?.some(.top))
+                    Text("Below").tag(Edge?.some(.bottom))
+                }
+                .onChange(of: edgeSide) {
+                    Settings.edgeSide = $0
+                    edgeChanged()
+                }
+                if let edgeSide {
+                    let across = edgeSide == .left || edgeSide == .right
+                    LabeledContent("Line up") {
+                        HStack {
+                            Text(across ? "Tops" : "Left sides").font(.caption)
+                            Slider(value: $edgeAlignment, in: 0...1)
+                                .onChange(of: edgeAlignment) { Settings.edgeAlignment = $0 }
+                            Text(across ? "Bottoms" : "Right sides").font(.caption)
+                        }
+                    }
+                    Text("Push the pointer past this side of the screen to control the other computer, and back past its side to return. Hold ⌃, ⌥, ⇧ or ⌘ to stay at the edge. Set the same on the other computer, from its side.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("Wake the other computer", isOn: $wakePeer)
                     .onChange(of: wakePeer) { Settings.wakePeer = $0 }
                 Text("If it's asleep when you press the shortcut, send it a Wake-on-LAN packet (same network only; it needs \"Wake for network access\" turned on).")

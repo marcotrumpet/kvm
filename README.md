@@ -4,7 +4,8 @@ Share one mouse and keyboard between two computers, peer to peer, on the same ne
 over the internet. A menu bar app on macOS, a tray app on Windows and Linux (untested on
 real machines so far, see below), plus an iPhone and iPad app that controls a computer.
 
-- **Switching**: a global shortcut, or hovering over the other computer's screen in the viewer.
+- **Switching**: a global shortcut, pushing the pointer past the side of the screen the other
+  computer is on (Mac to Mac, any number of displays), or hovering over its screen in the viewer.
 - **Direct connections** via [iroh](https://github.com/n0-computer/iroh) (QUIC, hole punching,
   relay fallback). No account or server of its own; local discovery by mDNS.
 - **Input**: relative mouse, keys as USB HID usages, media and Mac system keys, mouse wheel

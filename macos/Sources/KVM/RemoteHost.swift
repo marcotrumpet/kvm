@@ -31,7 +31,9 @@ final class RemoteHost {
         clipboard = ClipboardSync(core: core)
         clipboard.shareFiles = false
         core.onEvent = { [unowned self] in handle($0) }
-        injector.onEdgeExit = { [unowned self] edge, along in self.core.edgeExit(edge: edge, along: along) }
+        injector.onEdgeExit = { [unowned self] edge, along, display in
+            self.core.edgeExit(edge: edge, along: along, display: display)
+        }
         screenHost.onSharingChanged = { [unowned self] in
             state.sharingScreen = $0
             updateIndicator()
@@ -140,8 +142,8 @@ final class RemoteHost {
             if isControlled() { injector.gesture(g) }
         case .pointerAbs(let x, let y, let display):
             if isControlled() { injector.warp(x: x, y: y, display: display) }
-        case .confine(let display):
-            if isControlled() { injector.confine(display: display) }
+        case .confine(let display, let edges):
+            if isControlled() { injector.confine(display: display, edges: edges) }
         case .videoRequested(let params):
             Log.info("remote control asked to view this screen")
             Wake.display()

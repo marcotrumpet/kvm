@@ -113,9 +113,11 @@ Microphone" driver, which loops it into the "KVM Microphone" input that call app
 
 ### Displays
 
-While being viewed, the host sends `Control::DisplayList` (and again when its displays
-change): JSON `[{"id": u32, "name": str, "width": px, "height": px, "main": bool}, ...]`
-ordered left to right. `VideoParams.display` and `PointerAbs.display` pick one by id; 0
+Each side sends `Control::DisplayList` on connecting, again when its displays change, and
+when it starts being viewed: JSON `[{"id": u32, "name": str, "width": px, "height": px,
+"main": bool, "frame": [x, y, width, height]}, ...]` ordered left to right. `frame` is where
+the display is on the sender's desktop, in points with a top-left origin (macOS global
+coordinates); senders that don't know leave it out (Windows and Linux so far). `VideoParams.display` and `PointerAbs.display` pick one by id; 0
 means the main display.
 
 With `VideoParams.fit_host` (main display only), the host re-lays out its desktop to the
@@ -131,13 +133,29 @@ or the connection.
 (and the `main` one in the display list) for the viewer; the host's real main display is
 still there by its id.
 
-### Viewer control
+### Viewer control and moving across
+
+`Confine{display, edges}` keeps the controlled side's pointer on one display, or with
+`display` 0xFFFFFFFF anywhere on its desktop, and asks it to report pushes of 40 points
+past the edges in `edges` (bits: 1 left, 2 right, 4 top, 8 bottom). On the whole desktop
+only outer edges count, where no other display is beyond. A push answers `EdgeExit{edge,
+along, display}`: the edge (0 left, 1 right, 2 top, 3 bottom), the display's id, and the
+spot along that edge as 0..=65535. Dragging never counts. 0xFFFFFFFF with no edges, or
+`Leave`, lifts it.
 
 Entering control from the screen viewer, the controller sends `Enter`, `PointerAbs` (where
-the cursor entered the picture) and `Confine{display}`. The controlled side then keeps the
-pointer on that display and, when it is pushed past an edge, answers `EdgeExit{edge,
-along}`; the controller returns control and puts its own cursor just outside the viewer
-at the matching spot. `Leave` lifts the confinement.
+the cursor entered the picture) and `Confine{display, all edges}`. On `EdgeExit` it returns
+control and puts its own cursor just outside the viewer at the matching spot.
+
+Moving across: the user says which side of their Mac the other computer is on and how the
+two desktops line up (their bounding boxes, by tops, centers or bottoms), and the other
+computer's display list gives its displays' frames. When the pointer is pushed past this
+Mac's outer edge on that side, the controller sends `Enter`, `PointerAbs` (the matching
+spot on the peer display facing it) and `Confine{0xFFFFFFFF, the facing edge}`. The
+`EdgeExit` that comes back says which display it left from, so the controller puts its
+cursor at the matching spot just inside its own edge. Points map one to one, so displays of
+different sizes line up by how big things look; where nothing is opposite, the nearest
+display along the edge is used.
 
 ## Pairing
 

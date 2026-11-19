@@ -315,7 +315,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         }
         // At a screen edge there's no "outside": stay on the screen (hover stays disarmed
         // until the pointer leaves the picture anyway).
-        let screens = Injector.displayBounds()
+        let screens = Displays.bounds().map(\.rect)
         if !screens.contains(where: { $0.contains(p) }), let home = screens.first(where: { $0.intersects(r) }) {
             p = CGPoint(x: min(max(p.x, home.minX), home.maxX - 1), y: min(max(p.y, home.minY), home.maxY - 1))
         }

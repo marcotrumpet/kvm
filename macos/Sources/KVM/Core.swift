@@ -23,8 +23,8 @@ enum CoreEvent {
     case videoFrame(Data, keyframe: Bool)
     case pointerAbs(x: UInt16, y: UInt16, display: UInt32)
     case displayList(Data)
-    case confine(display: UInt32)
-    case edgeExit(edge: Int, along: UInt16)
+    case confine(display: UInt32, edges: UInt8)
+    case edgeExit(edge: Int, along: UInt16, display: UInt32)
     case videoBitrate(kbps: Int)
     case clipboard(Data)
     case fileSendProgress(transfer: UInt64, sent: Int64, total: Int64)
@@ -121,13 +121,39 @@ enum VideoQuality: String, CaseIterable {
     }
 }
 
-/// One of the host's displays, as told to a viewer (see docs/protocol.md).
+/// One of the peer's displays, as it tells us (see docs/protocol.md).
 struct DisplayInfo: Codable, Equatable {
     let id: UInt32
     let name: String
     let width: Int
     let height: Int
     let main: Bool
+    /// Where it is on the peer's desktop, in points, top-left origin: x, y, width, height.
+    /// Missing from peers that don't say (Windows and Linux so far).
+    var frame: [Double]? = nil
+
+    var bounds: CGRect? {
+        guard let f = frame, f.count == 4 else { return nil }
+        return CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+    }
+}
+
+/// A side of a display or desktop, numbered as in `edgeExit`.
+enum Edge: Int, CaseIterable {
+    case left, right, top, bottom
+
+    var opposite: Edge {
+        switch self {
+        case .left: .right
+        case .right: .left
+        case .top: .bottom
+        case .bottom: .top
+        }
+    }
+
+    /// This edge for `confine`.
+    var mask: UInt8 { 1 << UInt8(rawValue) }
+    static let all: UInt8 = 0x0F
 }
 
 /// A pinch or rotation (see `kvm_send_gesture`).
@@ -362,12 +388,13 @@ final class Core {
         kvm_pointer_abs(node, scale(x), scale(y), display)
     }
 
-    /// While controlling: keep the peer's pointer on one of its displays and report edge
-    /// exits (`UInt32.max`: lift it).
-    func confine(display: UInt32) { kvm_confine(node, display) }
+    /// While controlling: keep the peer's pointer on one of its displays (`UInt32.max`: on
+    /// its whole desktop) and report pushes past `edges` (`Edge` masks). `UInt32.max` with
+    /// no edges lifts it.
+    func confine(display: UInt32, edges: UInt8) { kvm_confine(node, display, edges) }
 
-    /// While controlled and confined: the pointer was pushed past an edge.
-    func edgeExit(edge: Int, along: UInt16) { kvm_edge_exit(node, UInt8(edge), along) }
+    /// While controlled and confined: the pointer was pushed past an edge of `display`.
+    func edgeExit(edge: Int, along: UInt16, display: UInt32) { kvm_edge_exit(node, UInt8(edge), along, display) }
 
     /// While the peer views this screen: which displays there are.
     func sendDisplayList(_ data: Data) {
@@ -422,8 +449,10 @@ private extension CoreEvent {
             self = .pointerAbs(x: UInt16(truncatingIfNeeded: e.a), y: UInt16(truncatingIfNeeded: e.b),
                                display: UInt32(truncatingIfNeeded: e.a >> 16))
         case KVM_EV_DISPLAY_LIST: self = .displayList(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
-        case KVM_EV_CONFINE: self = .confine(display: UInt32(truncatingIfNeeded: e.a))
-        case KVM_EV_EDGE_EXIT: self = .edgeExit(edge: Int(e.a), along: UInt16(truncatingIfNeeded: e.b))
+        case KVM_EV_CONFINE: self = .confine(display: UInt32(truncatingIfNeeded: e.a), edges: UInt8(truncatingIfNeeded: e.b))
+        case KVM_EV_EDGE_EXIT:
+            self = .edgeExit(edge: Int(e.a & 0xFF), along: UInt16(truncatingIfNeeded: e.b),
+                             display: UInt32(truncatingIfNeeded: e.a >> 8))
         case KVM_EV_VIDEO_BITRATE: self = .videoBitrate(kbps: Int(e.a))
         case KVM_EV_CLIPBOARD: self = .clipboard(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
         case KVM_EV_STALLED: self = .stalled

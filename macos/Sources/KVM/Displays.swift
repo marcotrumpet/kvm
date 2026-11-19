@@ -14,11 +14,34 @@ enum Displays {
             .compactMap { screen in
                 guard let id = (screen.deviceDescription[key] as? NSNumber)?.uint32Value else { return nil }
                 let mode = CGDisplayCopyDisplayMode(id)
+                let b = CGDisplayBounds(id)
                 return DisplayInfo(id: id, name: screen.localizedName,
                                    width: mode?.pixelWidth ?? Int(screen.frame.width),
                                    height: mode?.pixelHeight ?? Int(screen.frame.height),
-                                   main: id == resolve(0))
+                                   main: id == resolve(0),
+                                   frame: [b.minX, b.minY, b.width, b.height])
             }
+    }
+
+    /// Active displays and where they are (global coordinates, top-left origin). Any thread.
+    static func bounds() -> [(id: CGDirectDisplayID, rect: CGRect)] {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        return ids.prefix(Int(count)).map { ($0, CGDisplayBounds($0)) }
+    }
+
+    /// Whether `p`, on the edge of `rect`, is on the desktop's outer edge there: nothing
+    /// beyond it on that side.
+    static func isOuter(_ p: CGPoint, of rect: CGRect, edge: Edge, among rects: [CGRect]) -> Bool {
+        let beyond = switch edge {
+        case .left: CGPoint(x: rect.minX - 1, y: p.y)
+        case .right: CGPoint(x: rect.maxX, y: p.y)
+        case .top: CGPoint(x: p.x, y: rect.minY - 1)
+        case .bottom: CGPoint(x: p.x, y: rect.maxY)
+        }
+        return !rects.contains { $0.contains(beyond) }
     }
 
     static func encode(_ list: [DisplayInfo]) -> Data {
