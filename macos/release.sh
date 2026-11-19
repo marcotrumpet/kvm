@@ -5,8 +5,10 @@
 #   macos/release.sh ["notes, one item per line"]    (default: commit subjects since the last release)
 # Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
-# With dist/KVM-windows-setup.exe or dist/KVM-linux-x86_64.tar.gz present (the workflow's
-# Windows and Linux jobs), they are signed and released too, each with its own feed.
+# With dist/KVM-windows-setup.exe or dist/KVM-linux-x86_64.tar.gz present, they are signed
+# and released too, each with its own feed. ADD_ONLY=1: no Mac build; sign those and add
+# them to the existing release v<VERSION>, with its notes (the workflow publishes the Mac
+# app as soon as it is built, and the Windows and Linux apps once they are).
 set -euo pipefail
 trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 [ "${TRACE:-0}" = 1 ] && set -x # TRACE=1: print each command
@@ -22,8 +24,14 @@ SPARKLE_SHA256="1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
 SPARKLE_DIR="$ROOT/target/sparkle"
 
 [ -n "$VERSION" ] || { echo "error: no VERSION in build.sh"; exit 1; }
+ADD_ONLY="${ADD_ONLY:-0}"
 git -C "$ROOT" diff --quiet HEAD || { echo "error: commit your changes first (the release is built from HEAD)"; exit 1; }
-if [ "${PUBLISH:-1}" = 1 ] && gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+if [ "$ADD_ONLY" = 1 ]; then
+    if [ "${PUBLISH:-1}" = 1 ] && ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+        echo "error: $TAG isn't released yet, so there's nothing to add to"
+        exit 1
+    fi
+elif [ "${PUBLISH:-1}" = 1 ] && gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     echo "error: $TAG is already released; bump VERSION in build.sh"
     exit 1
 fi
@@ -38,7 +46,9 @@ if [ ! -x "$SPARKLE_DIR/bin/sign_update" ]; then
 fi
 
 NOTES="${1:-}"
-if [ -z "$NOTES" ]; then
+if [ "$ADD_ONLY" = 1 ] && [ "${PUBLISH:-1}" = 1 ]; then
+    NOTES="$(gh release view "$TAG" --repo "$REPO" --json body -q .body)" # the same in every feed
+elif [ -z "$NOTES" ]; then
     PREVIOUS="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
     if [ -n "$PREVIOUS" ] && git -C "$ROOT" rev-parse -q --verify "refs/tags/$PREVIOUS" >/dev/null; then
         NOTES="$(git -C "$ROOT" log --format='%s' "$PREVIOUS..HEAD")"
@@ -47,7 +57,7 @@ if [ -z "$NOTES" ]; then
     fi
 fi
 
-VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
+[ "$ADD_ONLY" = 1 ] || VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
 
 echo "==> Appcast"
 # Prints: sparkle:edSignature="..." length="..."
@@ -88,7 +98,9 @@ FEED
 }
 
 ASSETS=()
-feed appcast.xml "KVM" KVM-macos.zip "" $'\n      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>'
+if [ "$ADD_ONLY" != 1 ]; then
+    feed appcast.xml "KVM" KVM-macos.zip "" $'\n      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>'
+fi
 if [ -f "$DIST/KVM-windows-setup.exe" ]; then
     feed appcast-windows.xml "KVM for Windows" KVM-windows-setup.exe \
         'sparkle:os="windows" sparkle:installerArguments="/SILENT /SP- /NOCANCEL"'
@@ -97,8 +109,20 @@ if [ -f "$DIST/KVM-linux-x86_64.tar.gz" ]; then
     feed appcast-linux.xml "KVM for Linux" KVM-linux-x86_64.tar.gz 'sparkle:os="linux"'
 fi
 
+if [ "$ADD_ONLY" = 1 ] && [ ! -f "$DIST/KVM-windows-setup.exe" ] && [ ! -f "$DIST/KVM-linux-x86_64.tar.gz" ]; then
+    echo "error: ADD_ONLY=1 but no Windows or Linux build in dist/"
+    exit 1
+fi
+
 if [ "${PUBLISH:-1}" != 1 ]; then
     echo "==> Not publishing (PUBLISH=0): ${ASSETS[*]}"
+    exit 0
+fi
+
+if [ "$ADD_ONLY" = 1 ]; then
+    echo "==> Adding to GitHub release $TAG"
+    gh release upload "$TAG" "${ASSETS[@]}" --repo "$REPO"
+    echo "==> Added to $TAG: ${ASSETS[*]##*/}"
     exit 0
 fi
 

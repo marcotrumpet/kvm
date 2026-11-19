@@ -83,8 +83,9 @@ jobs:
           name: linux
           path: dist/KVM-linux-x86_64.tar.gz
 
+  # Publishes the release with the Mac app as soon as it is built; `desktop` adds the Windows
+  # and Linux apps to it once they are.
   mac:
-    needs: [windows, linux]
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -121,16 +122,6 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows
-          path: dist
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux
-          path: dist
-
       - name: Build, sign, release
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -150,6 +141,42 @@ jobs:
           path: |
             dist/KVM-macos.zip
             dist/appcast.xml
+
+  # Signs the Windows and Linux builds' feeds (Sparkle's sign_update only runs on macOS) and
+  # adds them to the release the mac job published.
+  desktop:
+    needs: [mac, windows, linux]
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: dist
+
+      - name: Sign, add to the release
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+          PUBLISH: ${{ inputs.publish && '1' || '0' }}
+          TRACE: ${{ inputs.trace && '1' || '0' }}
+        run: |
+          [ -n "$SPARKLE_PRIVATE_KEY" ] || { echo "::error::SPARKLE_PRIVATE_KEY secret missing"; exit 1; }
+          ADD_ONLY=1 macos/release.sh "$NOTES"
+
+      - name: Keep the builds
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KVM-desktop
+          path: |
             dist/KVM-windows-setup.exe
             dist/appcast-windows.xml
             dist/KVM-linux-x86_64.tar.gz
