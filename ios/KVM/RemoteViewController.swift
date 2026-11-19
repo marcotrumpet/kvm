@@ -91,6 +91,8 @@ final class RemoteViewController: UIViewController {
     private var mouseObservers: [NSObjectProtocol] = []
     /// Briefly not asking for the pointer lock, so iPadOS grants it afresh (`relockPointer`).
     private var relocking = false
+    /// Counts reconnections, so only the latest one's checks run.
+    private var relockGeneration = 0
 
     init(model: AppModel) {
         self.model = model
@@ -1072,10 +1074,17 @@ final class RemoteViewController: UIViewController {
     private func mouseReconnected() {
         GCMouse.mice().forEach(attach)
         relockPointer()
-        // The new mouse's input can show up a moment after it connects.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self, view.window != nil else { return }
-            GCMouse.mice().forEach(attach)
+        // The keyboard and its trackpad connect separately, and iPadOS doesn't lock the
+        // pointer without a pointing device yet: check for a few seconds and ask again until
+        // it is locked. The new mouse's input can also show up a moment after it connects.
+        relockGeneration += 1
+        let generation = relockGeneration
+        for delay in [0.5, 1, 2, 3.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, generation == relockGeneration, view.window != nil else { return }
+                GCMouse.mice().forEach(attach)
+                if !pointerLocked, !GCMouse.mice().isEmpty { relockPointer() }
+            }
         }
     }
 
