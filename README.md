@@ -100,7 +100,8 @@ locks the pointer to the app, otherwise the iPad pointer points at the picture).
 > **Untested on real machines.** The author has no Windows PC or Linux desktop, so these
 > apps have never been run by a person. They build, and their tests pass, on GitHub's
 > Windows and Ubuntu machines (CI), the OS layer type-checks against the real Windows and X11
-> APIs, and the screen stream was checked to decode in the Mac viewer, but pairing, input,
+> APIs, and the screen streams were checked to decode both ways (Windows and Linux to the
+> Mac viewer, the Mac's VideoToolbox stream through Linux's decoder), but pairing, input,
 > the clipboard, files and screen sharing have not been tried on a PC. Expect rough edges;
 > reports and logs (tray menu > Show Log) are welcome.
 
@@ -117,8 +118,8 @@ either computer locks both (Windows; the tray menu turns it off). The Mac's scre
 the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
 display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
 … Screen in the tray; click the picture to control the Mac there, unless View Only is on). The
-Linux screen can be shared too (X11 capture, encoded with OpenH264). Not yet: viewing the Mac's
-screen on Linux, the microphone.
+Linux screen can be shared too (X11 capture, encoded with OpenH264), and Linux can show the
+Mac's screen the same way when FFmpeg is installed (see below). Not yet: the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
@@ -144,6 +145,11 @@ source into the app (the `h264` feature). H.264 is covered by patents, and Cisco
 royalties only for its own prebuilt OpenH264 binaries, not for builds from source: keep that
 in mind before distributing it. Loading Cisco's binary at runtime instead is a possible
 change.
+
+Viewing the Mac's screen on Linux decodes with the system's FFmpeg (libavcodec 58 to 62,
+loaded at runtime; e.g. `sudo apt install libavcodec60` or your distro's ffmpeg package);
+without it the View item isn't in the tray menu. Not OpenH264: its decoder silently shows
+wrong pictures for the Mac's stream, whose low-latency mode uses long-term reference frames.
 
 Locally: `cargo run -p kvm-desktop`.
 

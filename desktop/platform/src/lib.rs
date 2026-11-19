@@ -90,6 +90,9 @@ pub trait Delegate: Send + Sync + 'static {
 
 pub mod video;
 
+#[cfg(any(target_os = "linux", test))]
+mod avcodec;
+
 #[cfg(any(all(target_os = "linux", feature = "h264"), test))]
 pub mod h264;
 
@@ -101,17 +104,15 @@ pub use windows::{Injector, capture, clipboard, dialog, screen, system_proxy, ui
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
+pub use linux::{Injector, capture, clipboard, dialog, system_proxy, ui, updater, viewer};
 #[cfg(all(target_os = "linux", feature = "h264"))]
 pub use linux::screen;
 #[cfg(all(target_os = "linux", not(feature = "h264")))]
 pub use unsupported::screen;
 
-/// Stand-ins: everything on macOS (it has its own app); the viewer on Linux (and screen
-/// sharing without the h264 feature).
+/// Stand-ins: everything on macOS (it has its own app); screen sharing on Linux without the
+/// h264 feature.
 #[cfg(not(windows))]
 mod unsupported;
-#[cfg(target_os = "linux")]
-pub use unsupported::viewer;
 #[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater, viewer};

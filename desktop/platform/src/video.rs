@@ -152,12 +152,59 @@ pub fn nv12_to_bgra(src: &[u8], width: usize, height: usize, stride: usize, plan
         let uv = &src[chroma + (y / 2) * stride..];
         let dst = &mut out[y * width * 4..(y + 1) * width * 4];
         for x in 0..width {
-            let c = (row[x] as i32 - 16) * 298;
-            let (u, v) = (uv[x & !1] as i32 - 128, uv[(x & !1) + 1] as i32 - 128);
-            let r = (c + 459 * v + 128) >> 8;
-            let g = (c - 55 * u - 136 * v + 128) >> 8;
-            let b = (c + 541 * u + 128) >> 8;
-            dst[x * 4..x * 4 + 4].copy_from_slice(&[b.clamp(0, 255) as u8, g.clamp(0, 255) as u8, r.clamp(0, 255) as u8, 255]);
+            dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], uv[x & !1], uv[(x & !1) + 1]));
+        }
+    }
+}
+
+/// I420 (separate U and V planes, as OpenH264 decodes) to BGRA, `width` x `height`; same
+/// colors as [`nv12_to_bgra`].
+#[allow(clippy::too_many_arguments)]
+pub fn i420_to_bgra(
+    y_plane: &[u8],
+    y_stride: usize,
+    u_plane: &[u8],
+    v_plane: &[u8],
+    uv_stride: usize,
+    width: usize,
+    height: usize,
+    out: &mut Vec<u8>,
+) {
+    out.resize(width * height * 4, 0);
+    for y in 0..height {
+        let row = &y_plane[y * y_stride..];
+        let (u, v) = (&u_plane[(y / 2) * uv_stride..], &v_plane[(y / 2) * uv_stride..]);
+        let dst = &mut out[y * width * 4..(y + 1) * width * 4];
+        for x in 0..width {
+            dst[x * 4..x * 4 + 4].copy_from_slice(&bt709(row[x], u[x / 2], v[x / 2]));
+        }
+    }
+}
+
+/// One BT.709 limited-range pixel as BGRA.
+fn bt709(y: u8, u: u8, v: u8) -> [u8; 4] {
+    let c = (y as i32 - 16) * 298;
+    let (u, v) = (u as i32 - 128, v as i32 - 128);
+    let r = (c + 459 * v + 128) >> 8;
+    let g = (c - 55 * u - 136 * v + 128) >> 8;
+    let b = (c + 541 * u + 128) >> 8;
+    [b.clamp(0, 255) as u8, g.clamp(0, 255) as u8, r.clamp(0, 255) as u8, 255]
+}
+
+/// Scales a BGRA picture to `width` x `height` (nearest pixel: the stream is asked for at
+/// the window's size, so this rarely does much).
+pub fn scale_bgra(src: &[u8], src_w: usize, src_h: usize, width: usize, height: usize, out: &mut Vec<u8>) {
+    out.resize(width * height * 4, 0);
+    if (src_w, src_h) == (width, height) {
+        out.copy_from_slice(&src[..width * height * 4]);
+        return;
+    }
+    let xs: Vec<usize> = (0..width).map(|x| (x * src_w / width.max(1)).min(src_w - 1) * 4).collect();
+    for y in 0..height {
+        let row = &src[(y * src_h / height.max(1)).min(src_h - 1) * src_w * 4..];
+        let dst = &mut out[y * width * 4..(y + 1) * width * 4];
+        for (x, &sx) in xs.iter().enumerate() {
+            dst[x * 4..x * 4 + 4].copy_from_slice(&row[sx..sx + 4]);
         }
     }
 }
@@ -277,6 +324,31 @@ mod tests {
                 assert!((*got as i32 - want as i32).abs() <= 6, "{px:?}");
             }
         }
+    }
+
+    #[test]
+    fn i420_matches_nv12() {
+        // 4x1: four luma samples, then two U/V pairs (interleaved in NV12, planes in I420).
+        let nv12 = [16, 235, 81, 145, 90, 240, 54, 34];
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        nv12_to_bgra(&nv12, 4, 1, 4, 1, &mut a);
+        i420_to_bgra(&nv12[..4], 4, &[90, 54], &[240, 34], 2, 4, 1, &mut b);
+        assert_eq!(a, b);
+        let mut gray = Vec::new();
+        i420_to_bgra(&[16, 235], 2, &[128], &[128], 1, 2, 1, &mut gray);
+        assert_eq!(gray, vec![0, 0, 0, 255, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn scales_by_nearest_pixel() {
+        let px = |v: u8| [v, v, v, 255];
+        let src: Vec<u8> = [1, 2, 3, 4].into_iter().flat_map(px).collect(); // 2x2
+        let mut out = Vec::new();
+        scale_bgra(&src, 2, 2, 4, 2, &mut out);
+        let got: Vec<u8> = out.chunks(4).map(|p| p[0]).collect();
+        assert_eq!(got, vec![1, 1, 2, 2, 3, 3, 4, 4]);
+        scale_bgra(&src, 2, 2, 1, 1, &mut out);
+        assert_eq!(out, px(1));
     }
 
     #[test]

@@ -20,5 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # FFmpeg's libavcodec, which the viewer loads: its decoding test then runs for real.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: cargo test -p kvm-platform -p kvm-desktop
+        env:
+          KVM_REQUIRE_FFMPEG: "1"
       - run: cargo build -p kvm-desktop

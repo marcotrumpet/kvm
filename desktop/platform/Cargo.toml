@@ -39,6 +39,7 @@ tracing = "0.1.44"
 openh264 = { version = "=0.9.9", optional = true } # H.264 for sharing the screen (Linux has no system encoder)
 arboard = { version = "3.7", default-features = false }
 ksni = { version = "0.3", features = ["blocking"] }
+libloading = "0.9" # the system's FFmpeg, for viewing the peer's screen
 x11rb = { version = "0.13", features = ["randr", "xfixes", "xtest"] }
 
 [features]
@@ -49,3 +50,4 @@ h264 = ["dep:openh264"]
 
 [dev-dependencies]
 openh264 = "=0.9.9" # the software encoder's tests run anywhere
+libloading = "0.9" # so do the FFmpeg decoder's, where FFmpeg is installed

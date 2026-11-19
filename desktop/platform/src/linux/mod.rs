@@ -5,6 +5,7 @@
 mod keymap;
 #[cfg(feature = "h264")]
 pub mod screen;
+pub mod viewer;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
