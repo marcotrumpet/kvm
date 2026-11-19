@@ -32,6 +32,9 @@ final class RemoteViewController: UIViewController {
     private let info = UILabel()
     private let keyboard = KeyboardInputView()
     private let bar = UIStackView()
+    /// Scrolls the bar's buttons sideways when they don't fit (an iPhone); the collapse
+    /// button stays put next to it.
+    private let barScroller = ButtonScroller()
     private let barBackground = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
     private var barButtons: [UIView] = []
     private let displayButton = UIButton(type: .system)
@@ -385,6 +388,7 @@ final class RemoteViewController: UIViewController {
         collapse.addAction(UIAction { [weak self, weak collapse] _ in
             guard let self else { return }
             barCollapsed.toggle()
+            barScroller.setContentOffset(.zero, animated: false)
             UIView.animate(withDuration: 0.2) {
                 self.barButtons.forEach { $0.isHidden = self.barCollapsed }
                 if !self.barCollapsed { self.updateDisplayMenu() }
@@ -419,24 +423,42 @@ final class RemoteViewController: UIViewController {
         }
 
         barButtons = [close, keys, modeButton, screen, fitButton, soundButton, displayButton, clipboard] + macButtons + [info]
-        bar.addArrangedSubviews(barButtons + [collapse])
+        bar.addArrangedSubviews(barButtons)
         bar.axis = .horizontal
         bar.alignment = .center
         bar.spacing = 2
         bar.isLayoutMarginsRelativeArrangement = true
         bar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 2)
         bar.translatesAutoresizingMaskIntoConstraints = false
+        barScroller.showsHorizontalScrollIndicator = false
+        barScroller.alwaysBounceHorizontal = false
+        barScroller.translatesAutoresizingMaskIntoConstraints = false
+        barScroller.addSubview(bar)
+        collapse.translatesAutoresizingMaskIntoConstraints = false
         barBackground.translatesAutoresizingMaskIntoConstraints = false
         barBackground.layer.cornerRadius = 22
         barBackground.clipsToBounds = true
-        barBackground.contentView.addSubview(bar)
+        barBackground.contentView.addSubview(barScroller)
+        barBackground.contentView.addSubview(collapse)
         view.addSubview(barBackground)
+        // As wide as the buttons, until that would run past the screen's leading edge.
+        let fitContent = barScroller.widthAnchor.constraint(equalTo: bar.widthAnchor)
+        fitContent.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            bar.leadingAnchor.constraint(equalTo: barBackground.contentView.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: barBackground.contentView.trailingAnchor),
-            bar.topAnchor.constraint(equalTo: barBackground.contentView.topAnchor),
-            bar.bottomAnchor.constraint(equalTo: barBackground.contentView.bottomAnchor),
-            bar.heightAnchor.constraint(equalToConstant: 44),
+            bar.leadingAnchor.constraint(equalTo: barScroller.contentLayoutGuide.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: barScroller.contentLayoutGuide.trailingAnchor),
+            bar.topAnchor.constraint(equalTo: barScroller.contentLayoutGuide.topAnchor),
+            bar.bottomAnchor.constraint(equalTo: barScroller.contentLayoutGuide.bottomAnchor),
+            bar.heightAnchor.constraint(equalTo: barScroller.frameLayoutGuide.heightAnchor),
+            fitContent,
+            barScroller.leadingAnchor.constraint(equalTo: barBackground.contentView.leadingAnchor),
+            barScroller.topAnchor.constraint(equalTo: barBackground.contentView.topAnchor),
+            barScroller.bottomAnchor.constraint(equalTo: barBackground.contentView.bottomAnchor),
+            barScroller.heightAnchor.constraint(equalToConstant: 44),
+            collapse.leadingAnchor.constraint(equalTo: barScroller.trailingAnchor),
+            collapse.trailingAnchor.constraint(equalTo: barBackground.contentView.trailingAnchor, constant: -2),
+            collapse.centerYAnchor.constraint(equalTo: barBackground.contentView.centerYAnchor),
+            barBackground.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 8),
             barBackground.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -8),
             barBackground.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
         ])
@@ -1068,6 +1090,12 @@ private final class VideoView: UIView {
         guard videoSize.width > 0, videoSize.height > 0 else { return .zero }
         return AVMakeRect(aspectRatio: videoSize, insideRect: bounds)
     }
+}
+
+/// Scrolls even when a drag starts on one of its buttons (a plain scroll view leaves those
+/// touches to the button), and still lets a tap press it.
+private final class ButtonScroller: UIScrollView {
+    override func touchesShouldCancel(in view: UIView) -> Bool { true }
 }
 
 private extension UIStackView {
