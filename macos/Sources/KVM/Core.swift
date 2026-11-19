@@ -58,6 +58,17 @@ struct VideoParams: Equatable {
     var prefer: VideoPreference = .balanced
     /// One of the host's displays (an id from its display list); 0 is its main display.
     var display: UInt32 = 0
+    /// Re-lay out the host's main display to the viewer instead of only scaling.
+    var fitHost = HostFit.off
+}
+
+/// How the host's main display follows the viewer (see `VideoParams.fit_host`).
+enum HostFit: UInt8 {
+    case off = 0
+    /// At the viewer's size.
+    case size = 1
+    /// At the viewer's aspect ratio, keeping about the host's own pixel count.
+    case shape = 2
 }
 
 /// What the host gives up first when bits run short.
@@ -235,7 +246,8 @@ final class Core {
 
     func requestVideo(_ p: VideoParams) {
         kvm_video_request(node, UInt16(clamping: p.maxWidth), UInt16(clamping: p.maxHeight),
-                          UInt8(clamping: p.fps), UInt32(clamping: p.bitrateKbps), UInt8(p.prefer.rawValue), p.display)
+                          UInt8(clamping: p.fps), UInt32(clamping: p.bitrateKbps), UInt8(p.prefer.rawValue), p.display,
+                          p.fitHost.rawValue)
     }
 
     func stopVideo() { kvm_video_stop(node) }
@@ -329,7 +341,8 @@ private extension CoreEvent {
                 maxWidth: Int((e.a >> 16) & 0xFFFF), maxHeight: Int(e.a & 0xFFFF),
                 fps: Int((e.b >> 32) & 0xFF), bitrateKbps: Int(e.b & 0xFFFF_FFFF),
                 prefer: VideoPreference(rawValue: Int((e.b >> 40) & 0xFF)) ?? .balanced,
-                display: UInt32(truncatingIfNeeded: e.a >> 32)))
+                display: UInt32(truncatingIfNeeded: e.a >> 32),
+                fitHost: HostFit(rawValue: UInt8(truncatingIfNeeded: e.b >> 48)) ?? .off))
         case KVM_EV_VIDEO_STOPPED: self = .videoStopped
         case KVM_EV_KEYFRAME_REQUESTED: self = .keyframeRequested
         case KVM_EV_VIDEO_FRAME:

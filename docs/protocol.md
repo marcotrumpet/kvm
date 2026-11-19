@@ -89,6 +89,14 @@ change): JSON `[{"id": u32, "name": str, "width": px, "height": px, "main": bool
 ordered left to right. `VideoParams.display` and `PointerAbs.display` pick one by id; 0
 means the main display.
 
+With `VideoParams.fit_host` (main display only), the host re-lays out its desktop to the
+viewer: a macOS host creates a virtual display and mirrors its main display onto it, so the
+picture keeps the viewer's aspect ratio. 1 sizes it to `max_width` x
+`max_height`; 2 keeps only that aspect ratio, at about the host's own pixel
+count, so `max_*` stays a cap the viewer can raise when zooming in. The virtual display is
+the main one while it exists; it goes away with `VideoStop`, a request with `fit_host` 0,
+or the connection.
+
 ### Viewer control
 
 Entering control from the screen viewer, the controller sends `Enter`, `PointerAbs` (where

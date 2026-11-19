@@ -9,11 +9,13 @@ let package = Package(
     platforms: [.macOS(.v13)],
     targets: [
         .systemLibrary(name: "CKvm", path: "Sources/CKvm"),
+        .target(name: "CGVirtualDisplay", path: "Sources/CGVirtualDisplay"),
         .executableTarget(
             name: "KVM",
-            dependencies: ["CKvm"],
+            dependencies: ["CKvm", "CGVirtualDisplay"],
             linkerSettings: [
                 .unsafeFlags(["-L", rustLib]),
+                .linkedFramework("CoreGraphics"),
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreWLAN"),

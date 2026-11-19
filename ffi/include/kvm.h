@@ -24,7 +24,7 @@ enum {
     KVM_EV_CONSUMER = 12,     // a = USB HID consumer usage (page 0x0C), flag = down
     KVM_EV_WHEEL = 13,        // mouse wheel notches: a = dx, b = dy
     KVM_EV_VIDEO_REQUESTED = 14, // start (or update) streaming: a = display << 32 | max_width << 16 | max_height,
-                                 // b = prefer << 40 | fps << 32 | kbps
+                                 // b = fit_host << 48 | prefer << 40 | fps << 32 | kbps
     KVM_EV_VIDEO_STOPPED = 15,
     KVM_EV_KEYFRAME_REQUESTED = 16,
     KVM_EV_VIDEO_FRAME = 17,  // data/data_len = encoded frame, flag = keyframe
@@ -111,9 +111,11 @@ void kvm_send_gesture(const KvmNode *node, uint8_t kind, uint8_t phase, int32_t 
 
 // Screen viewing.
 // prefer: 0 balanced, 1 keep resolution (drop frame rate first), 2 keep frame rate.
+// fit_host: re-lay out the host's main display instead of scaling: 1 at max_width x max_height,
+// 2 at that aspect ratio but the host's own pixel count (0: off).
 // Calling again while streaming updates the stream in place.
 void kvm_video_request(const KvmNode *node, uint16_t max_width, uint16_t max_height, uint8_t fps,
-                       uint32_t bitrate_kbps, uint8_t prefer, uint32_t display);
+                       uint32_t bitrate_kbps, uint8_t prefer, uint32_t display, uint8_t fit_host);
 void kvm_video_stop(const KvmNode *node);
 bool kvm_video_can_send(const KvmNode *node); // ask before encoding; skip the frame on false
 bool kvm_video_send_frame(const KvmNode *node, const uint8_t *data, size_t len, bool keyframe); // copies data

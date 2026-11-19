@@ -40,6 +40,8 @@ final class RemoteViewController: UIViewController {
     private var requestedSize: CGSize?
 
     private var screenOn = Prefs.screenOn
+    /// The computer lays out its main display at this screen's size and shape.
+    private var fitHost = Prefs.fitHost
     private var mode = Prefs.touchMode
     private var barCollapsed = false
 
@@ -219,9 +221,12 @@ final class RemoteViewController: UIViewController {
     private func startVideo() {
         requestedSize = pixelSize
         // Zoomed in, more pixels than the screen has keep the picture sharp (the computer
-        // sends at most its display's own resolution).
+        // sends at most its display's own resolution). A fitted computer takes only this
+        // screen's shape, so zooming still finds more pixels there.
         let size = CGSize(width: pixelSize.width * streamZoom, height: pixelSize.height * streamZoom)
-        model.view(VideoQuality.auto.params(maxSize: size)) { [weak self] data in
+        var params = VideoQuality.auto.params(maxSize: size)
+        params.fitHost = fitHost ? .shape : .off
+        model.view(params) { [weak self] data in
             DispatchQueue.main.async { self?.enqueue(data) }
         }
     }
@@ -327,6 +332,18 @@ final class RemoteViewController: UIViewController {
             updateDisplayMenu()
             updateStatus()
         }, for: .primaryActionTriggered)
+        let fit = button(fitHost ? "aspectratio.fill" : "aspectratio", "Fit computer to this screen") {}
+        fit.addAction(UIAction { [weak self, weak fit] _ in
+            guard let self else { return }
+            fitHost.toggle()
+            Prefs.fitHost = fitHost
+            fit?.configuration?.image = UIImage(systemName: fitHost ? "aspectratio.fill" : "aspectratio")
+            showHint(fitHost ? "The computer's resolution follows this screen" : "The computer keeps its own resolution")
+            if screenOn {
+                resetZoom()
+                startVideo()
+            }
+        }, for: .primaryActionTriggered)
         let clipboard = button("doc.on.clipboard", "Send clipboard") { [weak self] in
             self?.model.sendClipboard()
             self?.showHint("Clipboard sent: paste it on the computer")
@@ -371,7 +388,7 @@ final class RemoteViewController: UIViewController {
             macButtons = [menu]
         }
 
-        barButtons = [close, keys, modeButton, screen, displayButton, clipboard] + macButtons + [info]
+        barButtons = [close, keys, modeButton, screen, fit, displayButton, clipboard] + macButtons + [info]
         bar.addArrangedSubviews(barButtons + [collapse])
         bar.axis = .horizontal
         bar.alignment = .center
@@ -931,6 +948,11 @@ enum Prefs {
     static var screenOn: Bool {
         get { defaults.object(forKey: "screenOn") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "screenOn") }
+    }
+
+    static var fitHost: Bool {
+        get { defaults.bool(forKey: "fitHost") }
+        set { defaults.set(newValue, forKey: "fitHost") }
     }
 
     static var touchMode: RemoteViewController.TouchMode {

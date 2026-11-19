@@ -65,6 +65,11 @@ pub struct VideoParams {
     pub prefer: u8,
     /// Which of the host's displays (an id from its display list); 0 is the main one.
     pub display: u32,
+    /// Re-lay out the host's main display (a virtual display mirroring it) instead of only
+    /// scaling the picture: 1 at `max_width` x `max_height`, 2 at that aspect ratio but the
+    /// host's own number of pixels (so a zoomed-in viewer can ask for more); 0 off. Ignored
+    /// for other displays. (A `u8` that was a `bool`: same encoding for 0 and 1.)
+    pub fit_host: u8,
 }
 
 /// Measurements since the last rate tick.

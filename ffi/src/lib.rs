@@ -295,7 +295,7 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
         Event::VideoRequested(p) => (
             KVM_EV_VIDEO_REQUESTED,
             ((p.display as i64) << 32) | ((p.max_width as i64) << 16) | p.max_height as i64,
-            ((p.prefer as i64) << 40) | ((p.fps as i64) << 32) | p.bitrate_kbps as i64,
+            ((p.fit_host as i64) << 48) | ((p.prefer as i64) << 40) | ((p.fps as i64) << 32) | p.bitrate_kbps as i64,
             false,
         ),
         Event::VideoStopped => (KVM_EV_VIDEO_STOPPED, 0, 0, false),
@@ -523,8 +523,11 @@ pub unsafe extern "C" fn kvm_video_request(
     bitrate_kbps: u32,
     prefer: u8,
     display: u32,
+    fit_host: u8,
 ) {
-    with_link(node, |l| l.request_video(VideoParams { max_width, max_height, fps, bitrate_kbps, prefer, display }))
+    with_link(node, |l| {
+        l.request_video(VideoParams { max_width, max_height, fps, bitrate_kbps, prefer, display, fit_host })
+    })
 }
 
 #[unsafe(no_mangle)]

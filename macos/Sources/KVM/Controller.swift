@@ -84,10 +84,11 @@ final class Controller {
     /// What to ask the peer for, from the viewer's settings and window. Main thread only.
     private func videoParams() -> VideoParams {
         // Without matching, ask for up to 4K; the peer never sends more than its display has.
-        let size = Settings.viewerMatchesWindow ? (viewer.videoPixelSize ?? CGSize(width: 1920, height: 1200))
-                                                : CGSize(width: 3840, height: 2400)
+        let size = Settings.viewerMatchesWindow || viewer.fitsHost ? (viewer.videoPixelSize ?? CGSize(width: 1920, height: 1200))
+                                                                   : CGSize(width: 3840, height: 2400)
         var params = Settings.viewerQuality.params(maxSize: size)
         params.display = viewer.selectedDisplay
+        params.fitHost = viewer.fitsHost ? .size : .off
         return params
     }
 

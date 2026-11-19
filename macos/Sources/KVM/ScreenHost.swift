@@ -55,11 +55,15 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         lastParams = params
         if stream != nil {
             // Already streaming: the viewer changed its settings, window size or display.
-            let display = Displays.resolve(params.display)
+            let display = target(for: params)
             if display != capturedDisplay {
                 switchDisplay(to: display, params: params)
             } else {
-                queue.async { [self] in reconfigure(params) }
+                let fitted = ScreenHost.fittedSize(of: display)
+                queue.async { [self] in
+                    if let fitted { nativeSize = fitted }
+                    reconfigure(params)
+                }
             }
             return
         }
@@ -87,6 +91,7 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let stream = self.stream
         self.stream = nil
         capturedDisplay = 0
+        VirtualDisplay.shared.remove(owner: self)
         stream?.stopCapture { _ in }
         queue.async { [self] in
             if let encoder { VTCompressionSessionInvalidate(encoder) }
@@ -116,6 +121,10 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
                 let display = try await ScreenHost.scDisplay(id)
                 try await stream?.updateContentFilter(SCContentFilter(display: display, excludingWindows: []))
                 capturedDisplay = display.displayID
+                // Capture has moved off a virtual display we let go: unplug it now.
+                if VirtualDisplay.shared.released, display.displayID != VirtualDisplay.shared.id {
+                    VirtualDisplay.shared.remove(owner: self)
+                }
                 let native = ScreenHost.nativeSize(of: display)
                 queue.async { [self] in
                     nativeSize = native
@@ -131,10 +140,34 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     /// Main thread: displays changed; if ours went away, fall back to the main display.
     func displaysChanged() {
         guard stream != nil, let params = lastParams else { return }
-        let wanted = Displays.resolve(params.display)
+        let wanted = target(for: params)
         if wanted != capturedDisplay {
             switchDisplay(to: wanted, params: params)
         }
+    }
+
+    /// Main thread: the display to capture for `params`. With `fitHost`, a virtual display
+    /// at the viewer's size or shape that the main display mirrors. Otherwise ours (if any)
+    /// goes: right away, or once capture has moved off it (removing a display while it is
+    /// captured stops the capture).
+    private func target(for params: VideoParams) -> CGDirectDisplayID {
+        let virtual = VirtualDisplay.shared
+        if params.fitHost != .off, params.display == 0,
+           let id = virtual.fit(to: CGSize(width: params.maxWidth, height: params.maxHeight),
+                                shapeOnly: params.fitHost == .shape, owner: self) {
+            return id
+        }
+        guard stream != nil, capturedDisplay == virtual.id, let physical = virtual.release(owner: self) else {
+            virtual.remove(owner: self)
+            return Displays.resolve(params.display)
+        }
+        return params.display == 0 ? physical : Displays.resolve(params.display)
+    }
+
+    /// Main thread: the size the virtual display was set to, if `id` is it. Its display
+    /// mode can lag behind a resize.
+    private static func fittedSize(of id: CGDirectDisplayID) -> CGSize? {
+        id == VirtualDisplay.shared.id ? VirtualDisplay.shared.pixelSize : nil
     }
 
     private static func scDisplay(_ id: CGDirectDisplayID) async throws -> SCDisplay {
@@ -148,13 +181,14 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     }
 
     private static func nativeSize(of display: SCDisplay) -> CGSize {
+        if let fitted = fittedSize(of: display.displayID) { return fitted }
         let mode = CGDisplayCopyDisplayMode(display.displayID)
         return CGSize(width: Double(mode?.pixelWidth ?? display.width), height: Double(mode?.pixelHeight ?? display.height))
     }
 
     @MainActor
     private func begin(_ params: VideoParams) async throws {
-        let display = try await ScreenHost.scDisplay(Displays.resolve(params.display))
+        let display = try await ScreenHost.scDisplay(target(for: params))
         capturedDisplay = display.displayID
         // Native pixel size, scaled down to fit what the viewer asked for.
         let native = ScreenHost.nativeSize(of: display)

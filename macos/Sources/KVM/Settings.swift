@@ -93,6 +93,13 @@ enum Settings {
         set { defaults.set(newValue, forKey: "viewerMatchesWindow") }
     }
 
+    /// Re-lay out the peer's main display at the viewer window's size and shape, instead of
+    /// only scaling its picture.
+    static var viewerResizesHost: Bool {
+        get { defaults.bool(forKey: "viewerResizesHost") }
+        set { defaults.set(newValue, forKey: "viewerResizesHost") }
+    }
+
     /// Take control of the peer when the pointer enters its picture in the screen viewer.
     static var viewerHoverControl: Bool {
         get { defaults.object(forKey: "viewerHoverControl") as? Bool ?? true }

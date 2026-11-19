@@ -28,6 +28,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     /// The peer's display being viewed (0: its main display).
     private(set) var selectedDisplay: UInt32 = 0
     private let matchWindow = NSButton(checkboxWithTitle: "Match window size", target: nil, action: nil)
+    private let resizeHost = NSButton(checkboxWithTitle: "Resize host", target: nil, action: nil)
     private let hoverControl = NSButton(checkboxWithTitle: "Control on hover", target: nil, action: nil)
     private lazy var fullScreen = NSButton(
         image: NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Full Screen")!,
@@ -43,6 +44,10 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     private var requestedSize: CGSize?
 
     var isOpen: Bool { window != nil }
+
+    /// Whether the peer lays out its desktop at this window's size (its main display only);
+    /// the window then has no fixed shape.
+    var fitsHost: Bool { Settings.viewerResizesHost && selectedDisplay == 0 }
 
     /// The video area's size in pixels: what the stream should match.
     var videoPixelSize: CGSize? {
@@ -122,6 +127,12 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         matchWindow.action = #selector(matchWindowChanged)
         matchWindow.controlSize = .small
         matchWindow.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        resizeHost.state = Settings.viewerResizesHost ? .on : .off
+        resizeHost.target = self
+        resizeHost.action = #selector(resizeHostChanged)
+        resizeHost.controlSize = .small
+        resizeHost.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        resizeHost.toolTip = "Change the other computer's resolution to fit this window"
         hoverControl.state = Settings.viewerHoverControl ? .on : .off
         hoverControl.target = self
         hoverControl.action = #selector(hoverControlChanged)
@@ -141,7 +152,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         fullScreen.bezelStyle = .accessoryBarAction
         fullScreen.isBordered = false
         fullScreen.toolTip = "Full screen, one-to-one"
-        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, hoverControl, spacer, stats, fullScreen])
+        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, hoverControl, spacer, stats, fullScreen])
         bar.orientation = .horizontal
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
@@ -200,12 +211,20 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
 
     func windowDidExitFullScreen(_ notification: Notification) {
         view.oneToOne = false
-        if let format {
-            let dims = CMVideoFormatDescriptionGetDimensions(format)
-            window?.contentAspectRatio = CGSize(width: CGFloat(dims.width) / CGFloat(max(dims.height, 1)), height: 1)
-        }
+        updateAspectLock()
         onStreamSettingsChanged?()
         onPictureMoved?()
+    }
+
+    /// Locks the window to the stream's shape, or frees it while the host fits the window.
+    private func updateAspectLock() {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        if fitsHost {
+            window.contentResizeIncrements = NSSize(width: 1, height: 1)
+        } else if let format {
+            let dims = CMVideoFormatDescriptionGetDimensions(format)
+            window.contentAspectRatio = CGSize(width: CGFloat(dims.width) / CGFloat(max(dims.height, 1)), height: 1)
+        }
     }
 
     /// The viewed display's native pixel size, from the peer's display list.
@@ -275,16 +294,24 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         onStreamSettingsChanged?()
     }
 
+    @objc private func resizeHostChanged() {
+        Settings.viewerResizesHost = resizeHost.state == .on
+        updateAspectLock()
+        onStreamSettingsChanged?()
+    }
+
     func windowDidResize(_ notification: Notification) {
         onPictureMoved?()
-        guard Settings.viewerMatchesWindow else { return }
+        guard Settings.viewerMatchesWindow || fitsHost else { return }
         resizeDebounce?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let window, let last = requestedSize else { return }
             let scale = window.backingScaleFactor
             let now = CGSize(width: view.bounds.width * scale, height: view.bounds.height * scale)
-            // Ask again only for a real change, not a few pixels.
-            if abs(now.width - last.width) / last.width > 0.1 || abs(now.height - last.height) / last.height > 0.1 {
+            // Ask again only for a real change, not a few pixels. A fitted host follows closely
+            // (it re-lays out its desktop, so keep that rare too).
+            let threshold = fitsHost ? 0.02 : 0.1
+            if abs(now.width - last.width) / last.width > threshold || abs(now.height - last.height) / last.height > threshold {
                 onStreamSettingsChanged?()
             }
         }
@@ -333,6 +360,10 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         guard let window, let screen = window.screen ?? NSScreen.main else { return }
         sized = true
         guard !window.styleMask.contains(.fullScreen) else { return }
+        guard !fitsHost else { // the stream already has the window's shape
+            updateAspectLock()
+            return
+        }
         let dims = CMVideoFormatDescriptionGetDimensions(format)
         let aspect = CGFloat(dims.width) / CGFloat(max(dims.height, 1))
         let visible = screen.visibleFrame.insetBy(dx: 40, dy: 40)
