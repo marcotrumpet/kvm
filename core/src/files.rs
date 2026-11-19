@@ -28,6 +28,7 @@ const CHUNK: usize = 256 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_HEADER: usize = 64 * 1024;
 /// Permission bits kept on arrival: rwx for user/group/other, never setuid/setgid/sticky.
+#[cfg(unix)]
 const MODE_MASK: u32 = 0o777;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
