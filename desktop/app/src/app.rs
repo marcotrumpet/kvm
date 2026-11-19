@@ -373,7 +373,12 @@ impl App {
                     let _ = self.clipboard_in.send(text);
                 }
             }
-            Event::LockRequested => self.injector.lock_screen(),
+            Event::LockRequested => {
+                if self.config.lock().unwrap().lock_together {
+                    self.return_to_local(true); // nothing to control on a locked screen
+                    self.injector.lock_screen();
+                }
+            }
             // Files copied on a Mac arrive for its clipboard (clipboard = true): not offered
             // for pasting here yet, so only files sent on purpose are announced.
             Event::FileReceived { path, index, count, clipboard: false, .. } if index + 1 == count => {
@@ -646,6 +651,7 @@ impl App {
         menu.push(MenuEntry::item("received", "Show Received Files"));
         menu.push(MenuEntry::check("clipboard", "Share Clipboard", config.share_clipboard));
         menu.push(MenuEntry::check("swap", "Mac's Command Key Is Ctrl", config.swap_ctrl_cmd));
+        menu.push(MenuEntry::check("lock", "Lock Both Screens Together", config.lock_together));
         if updater::available() {
             menu.push(MenuEntry::item("update", "Check for Updates…"));
         }
@@ -684,6 +690,15 @@ impl Delegate for App {
         self.toggle();
     }
 
+    fn screen_locked(&self) {
+        let connected = self.state.lock().unwrap().connected;
+        if connected && self.config.lock().unwrap().lock_together && let Some(link) = self.link() {
+            info!("screen locked: locking the peer too");
+            self.return_to_local(true);
+            link.send_lock();
+        }
+    }
+
     fn menu(&self, id: &str) {
         match id {
             "control" => self.toggle(),
@@ -692,13 +707,14 @@ impl Delegate for App {
                 self.set_pairing_mode(on);
             }
             "unpair" => self.unpair(),
-            "clipboard" | "swap" => {
+            "clipboard" | "swap" | "lock" => {
                 let mut config = self.config.lock().unwrap();
-                if id == "clipboard" {
-                    config.share_clipboard = !config.share_clipboard;
-                } else {
-                    config.swap_ctrl_cmd = !config.swap_ctrl_cmd;
-                }
+                let setting = match id {
+                    "clipboard" => &mut config.share_clipboard,
+                    "swap" => &mut config.swap_ctrl_cmd,
+                    _ => &mut config.lock_together,
+                };
+                *setting = !*setting;
                 config.save(&self.config_dir);
                 drop(config);
                 self.refresh();

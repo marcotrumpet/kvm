@@ -18,6 +18,8 @@ pub struct Config {
     /// The Mac's Command keys act as Ctrl here and Ctrl as Command there, so shortcuts
     /// (copy, paste, ...) work under the same fingers on both.
     pub swap_ctrl_cmd: bool,
+    /// Locking either computer locks the other (like the Mac's setting).
+    pub lock_together: bool,
     pub hotkey: HotkeyConfig,
 }
 
@@ -29,6 +31,7 @@ impl Default for Config {
             remotes: BTreeMap::new(),
             share_clipboard: true,
             swap_ctrl_cmd: true,
+            lock_together: true,
             hotkey: HotkeyConfig::from(Hotkey::DEFAULT),
         }
     }

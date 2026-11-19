@@ -67,10 +67,19 @@ pub(super) fn hide_cursor(at: Option<POINT>) {
     }
 }
 
+/// The cursor hider's window also hears about session changes: the screen locking.
 unsafe extern "system" fn hider_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+    const WTS_SESSION_LOCK: usize = 7;
     if msg == WM_SETCURSOR {
         unsafe { SetCursor(None) };
         return LRESULT(1);
+    }
+    if msg == WM_WTSSESSION_CHANGE && wparam.0 == WTS_SESSION_LOCK {
+        if let Some(d) = capture::delegate() {
+            d.screen_locked();
+        }
+        return LRESULT(0);
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
@@ -94,6 +103,8 @@ fn create_cursor_hider() {
         // Alpha 1: invisible, but still under the pointer (alpha 0 would let it through).
         let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
         CURSOR_HIDER.store(hwnd.0 as isize, Ordering::Release);
+        use windows::Win32::System::RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification};
+        let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
     }
 }
 
@@ -109,8 +120,8 @@ pub fn quit() {
 pub fn run(delegate: Arc<dyn Delegate>, hotkey: Hotkey) -> anyhow::Result<()> {
     UI_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
     capture::set_hotkey(hotkey);
+    let _hooks = capture::install(delegate.clone())?; // before the hider, which reports to the delegate
     create_cursor_hider();
-    let _hooks = capture::install(delegate.clone())?;
     let tray = TrayIconBuilder::new()
         .with_icon(icon())
         .with_tooltip("KVM")

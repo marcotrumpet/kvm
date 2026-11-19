@@ -84,6 +84,8 @@ pub trait Delegate: Send + Sync + 'static {
     /// The switching shortcut was pressed (it never reaches either machine).
     fn hotkey(&self);
     fn menu(&self, id: &str);
+    /// The user locked this computer's screen.
+    fn screen_locked(&self) {}
 }
 
 #[cfg(windows)]

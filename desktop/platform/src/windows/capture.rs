@@ -86,6 +86,10 @@ impl Drop for Hooks {
     }
 }
 
+pub(super) fn delegate() -> Option<&'static Arc<dyn Delegate>> {
+    DELEGATE.get()
+}
+
 fn send(input: Input) {
     if let Some(d) = DELEGATE.get() {
         d.input(input);
