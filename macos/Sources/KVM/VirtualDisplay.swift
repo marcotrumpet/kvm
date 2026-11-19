@@ -15,7 +15,9 @@ final class VirtualDisplay {
     /// Its pixel area, read before it mirrors ours: mirroring changes its reported mode
     /// (letterboxed to our shape), which made each re-fit smaller than the last.
     private var physicalArea: CGFloat = 0
-    private var physicalPixels = CGSize.zero
+    /// Its size in points and pixels per point, read before it mirrors ours.
+    private var physicalPoints = CGSize.zero
+    private var physicalScale: CGFloat = 2
     private var mirrored = false
     /// As an extra screen: whether it was put to the right of the others yet.
     private var placed = false
@@ -24,6 +26,7 @@ final class VirtualDisplay {
     /// The size asked for, its text scale, and the pixels the mode it got has.
     private var size = CGSize.zero
     private var textScale: CGFloat = 1
+    private var hiDPI: Bool?
     private var backing = CGSize.zero
     private weak var owner: AnyObject?
     /// Mirrored (or an extra screen), as last asked; and a count that cancels pending retries.
@@ -39,15 +42,16 @@ final class VirtualDisplay {
     /// could not be created.
     /// `mirror`: the main display mirrors it; otherwise it is an extra screen. `textScale`
     /// draws everything that much bigger (fewer points across the same shape).
+    /// `hiDPI`: whether to draw at 2x (nil: when the display is big enough).
     func fit(to pixels: CGSize, shapeOnly: Bool, mirror: Bool = true, textScale: CGFloat = 1,
-             owner: AnyObject) -> CGDirectDisplayID? {
+             hiDPI: Bool? = nil, owner: AnyObject) -> CGDirectDisplayID? {
         self.owner = owner
         released = false
         let wanted = shapeOnly ? shape(pixels.width / max(pixels.height, 1)) : VirtualDisplay.round(pixels)
         if display == nil {
             physical = CGMainDisplayID()
-            physicalPixels = VirtualDisplay.pixels(of: physical)
-            physicalArea = physicalPixels.width * physicalPixels.height
+            physicalArea = VirtualDisplay.pixelArea(of: physical)
+            (physicalPoints, physicalScale) = VirtualDisplay.points(of: physical)
             guard let created = VirtualDisplay.create(like: physical) else {
                 Log.warn("creating a virtual display failed")
                 return nil
@@ -57,14 +61,15 @@ final class VirtualDisplay {
             Log.info("virtual display \(created.displayID) created")
         }
         guard let display else { return nil }
-        if wanted != size || textScale != self.textScale {
-            let (settings, pixels) = VirtualDisplay.settings(for: wanted, textScale: textScale)
+        if wanted != size || textScale != self.textScale || hiDPI != self.hiDPI {
+            let (settings, pixels) = VirtualDisplay.settings(for: wanted, textScale: textScale, hiDPI: hiDPI)
             guard display.apply(settings) else {
                 Log.warn("virtual display: \(Int(wanted.width))x\(Int(wanted.height)) at \(textScale)x text refused")
                 return size == .zero ? nil : display.displayID
             }
             size = wanted
             self.textScale = textScale
+            self.hiDPI = hiDPI
             backing = pixels
             Log.info("virtual display -> \(Int(pixels.width))x\(Int(pixels.height)) for \(Int(wanted.width))x\(Int(wanted.height)) at \(textScale)x text")
         }
@@ -113,21 +118,24 @@ final class VirtualDisplay {
         return VirtualDisplay.round(CGSize(width: (area * aspect).squareRoot(), height: (area / aspect).squareRoot()))
     }
 
-    /// For `owner`: the display at the physical main display's own size, only with bigger
-    /// or smaller text (the viewer keeps the host's resolution).
+    /// For `owner`: the display like the physical main display as it is set (its points,
+    /// not its pixels: it may be scaled for more space), divided by `textScale`.
     func fitLikeMain(textScale: CGFloat, owner: AnyObject) -> CGDirectDisplayID? {
-        let pixels = display == nil ? VirtualDisplay.pixels(of: CGMainDisplayID()) : physicalPixels
-        return fit(to: pixels, shapeOnly: false, textScale: textScale, owner: owner)
+        let (points, scale) = display == nil ? VirtualDisplay.points(of: CGMainDisplayID()) : (physicalPoints, physicalScale)
+        return fit(to: CGSize(width: points.width * scale, height: points.height * scale), shapeOnly: false,
+                   textScale: textScale, hiDPI: scale >= 2, owner: owner)
     }
 
     private static func pixelArea(of id: CGDirectDisplayID) -> CGFloat {
-        let size = pixels(of: id)
-        return size.width * size.height
+        let mode = CGDisplayCopyDisplayMode(id)
+        return CGFloat((mode?.pixelWidth ?? 2880) * (mode?.pixelHeight ?? 1800))
     }
 
-    private static func pixels(of id: CGDirectDisplayID) -> CGSize {
+    private static func points(of id: CGDirectDisplayID) -> (CGSize, CGFloat) {
+        let bounds = CGDisplayBounds(id).size
         let mode = CGDisplayCopyDisplayMode(id)
-        return CGSize(width: mode?.pixelWidth ?? 2880, height: mode?.pixelHeight ?? 1800)
+        let scale = mode.map { CGFloat($0.pixelWidth) / CGFloat(max($0.width, 1)) } ?? 2
+        return (bounds.width > 0 ? bounds : CGSize(width: 1440, height: 900), scale >= 2 ? 2 : 1)
     }
 
     /// For `owner`: unmirrors the display, so the physical one is the main display again,
@@ -224,8 +232,8 @@ final class VirtualDisplay {
     /// desktop, so text is drawn at the viewer's scale rather than tiny. `textScale` divides
     /// the points: macOS draws only at 1x or 2x, so bigger text has fewer pixels (the viewer
     /// scales the picture up) and smaller text more.
-    private static func settings(for pixels: CGSize, textScale: CGFloat) -> (CGVirtualDisplaySettings, CGSize) {
-        let hiDPI = min(pixels.width, pixels.height) >= 1080
+    private static func settings(for pixels: CGSize, textScale: CGFloat, hiDPI: Bool?) -> (CGVirtualDisplaySettings, CGSize) {
+        let hiDPI = hiDPI ?? (min(pixels.width, pixels.height) >= 1080)
         let scale: CGFloat = hiDPI ? 2 : 1
         let limit = CGFloat(maxPixels) / scale
         func points(_ v: CGFloat) -> CGFloat { CGFloat(Int(min(v / scale / textScale, limit)) & ~1) }

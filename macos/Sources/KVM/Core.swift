@@ -78,7 +78,8 @@ struct VideoParams: Equatable {
     var textSize = TextSize.standard
 }
 
-/// How big the host draws its desktop while viewed (see `VideoParams.text_size`).
+/// The resolution the host's main display has while viewed, relative to its default (see
+/// `VideoParams.text_size`): bigger text and everything else, or more room.
 enum TextSize: UInt8, CaseIterable {
     case standard = 0
     case smaller = 1
@@ -101,10 +102,25 @@ enum TextSize: UInt8, CaseIterable {
     var title: String {
         switch self {
         case .standard: "Default"
-        case .smaller: "Smaller"
+        case .smaller: "More space"
         case .larger: "Larger"
         case .largest: "Largest"
         }
+    }
+
+    /// The resolution, in points, this gives the host's main display `main` (as listed now,
+    /// at `current`); nil when the host doesn't say (Windows, Linux). Rounded like the host.
+    func resolution(of main: DisplayInfo?, current: TextSize) -> CGSize? {
+        guard let b = main?.bounds, b.width > 0 else { return nil }
+        if self == current { return b.size }
+        func side(_ v: CGFloat) -> CGFloat { CGFloat(Int(v * current.scale / scale) & ~1) }
+        return CGSize(width: side(b.width), height: side(b.height))
+    }
+
+    /// "1366 × 1024", or the title when the resolution isn't known.
+    func label(for main: DisplayInfo?, current: TextSize) -> String {
+        guard let r = resolution(of: main, current: current) else { return title }
+        return "\(Int(r.width)) × \(Int(r.height))" + (self == .standard ? " (default)" : "")
     }
 }
 

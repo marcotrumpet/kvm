@@ -142,14 +142,15 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         resizeHost.controlSize = .small
         resizeHost.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         resizeHost.toolTip = "Change the other computer's resolution and shape to fit this window, while viewing it"
-        textSizeMenu.removeAllItems()
-        textSizeMenu.addItems(withTitles: TextSize.ordered.map { "Text: \($0.title)" })
-        textSizeMenu.selectItem(at: TextSize.ordered.firstIndex(of: Settings.viewerTextSize) ?? 0)
+        updateResolutionMenu()
         textSizeMenu.target = self
         textSizeMenu.action = #selector(textSizeChanged)
         textSizeMenu.controlSize = .small
         textSizeMenu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        textSizeMenu.toolTip = "Make everything on the other computer's main display bigger or smaller, while viewing it"
+        textSizeMenu.toolTip = """
+            The other computer's resolution while viewing it: lower makes everything bigger, \
+            higher gives more space (its main display)
+            """
         sound.state = Settings.viewerAudio ? .on : .off
         sound.target = self
         sound.action = #selector(soundChanged)
@@ -208,6 +209,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         }
         let current = list.firstIndex { selectedDisplay == 0 ? $0.main : $0.id == selectedDisplay } ?? 0
         if !list.isEmpty { displayMenu.selectItem(at: current) }
+        updateResolutionMenu()
         displayMenu.isHidden = list.count < 2
         updateSourcePixels()
     }
@@ -337,9 +339,21 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         onStreamSettingsChanged?()
     }
 
+    /// The resolutions the other computer's main display can be set to while viewed. Hidden
+    /// when it doesn't say where its displays are (Windows, Linux: they can't change it).
+    private func updateResolutionMenu() {
+        let main = displays.first(where: \.main)
+        let current = Settings.viewerTextSize
+        textSizeMenu.removeAllItems()
+        textSizeMenu.addItems(withTitles: TextSize.ordered.map { "Resolution: \($0.label(for: main, current: current))" })
+        textSizeMenu.selectItem(at: TextSize.ordered.firstIndex(of: current) ?? 0)
+        textSizeMenu.isHidden = main != nil && main?.bounds == nil
+    }
+
     @objc private func textSizeChanged() {
         Settings.viewerTextSize = TextSize.ordered[max(textSizeMenu.indexOfSelectedItem, 0)]
         onStreamSettingsChanged?()
+        // Until the new display list arrives, the labels are from before: they still hold.
     }
 
     @objc private func soundChanged() {

@@ -38,6 +38,7 @@ final class RemoteViewController: UIViewController {
     private let barBackground = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
     private var barButtons: [UIView] = []
     private let displayButton = UIButton(type: .system)
+    private let resolutionButton = UIButton(type: .system)
     private var cancellables: Set<AnyCancellable> = []
     private var frames = VideoFrames()
     private var requestedSize: CGSize?
@@ -148,7 +149,10 @@ final class RemoteViewController: UIViewController {
             if let direct, !direct { parts.append("relayed") }
             self?.info.text = parts.joined(separator: " · ")
         }.store(in: &cancellables)
-        model.$displays.receive(on: RunLoop.main).sink { [weak self] _ in self?.updateDisplayMenu() }
+        model.$displays.receive(on: RunLoop.main).sink { [weak self] _ in
+            self?.updateDisplayMenu()
+            self?.updateResolutionMenu()
+        }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
             .merge(with: NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification))
@@ -352,6 +356,7 @@ final class RemoteViewController: UIViewController {
             screen?.configuration?.image = UIImage(systemName: screenOn ? "display" : "rectangle.dashed")
             if screenOn { startVideo() } else { stopVideo() }
             updateDisplayMenu()
+            updateResolutionMenu()
             updateStatus()
         }, for: .primaryActionTriggered)
         var fitConfig = UIButton.Configuration.plain()
@@ -400,6 +405,12 @@ final class RemoteViewController: UIViewController {
         displayButton.showsMenuAsPrimaryAction = true
         displayButton.accessibilityLabel = "Display"
         displayButton.isHidden = true
+        var resolutionConfig = displayConfig
+        resolutionConfig.image = UIImage(systemName: "textformat.size")
+        resolutionButton.configuration = resolutionConfig
+        resolutionButton.showsMenuAsPrimaryAction = true
+        resolutionButton.accessibilityLabel = "Resolution"
+        updateResolutionMenu()
         info.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         info.textColor = .lightGray
         let collapse = button("chevron.right", "Hide controls") {}
@@ -409,7 +420,10 @@ final class RemoteViewController: UIViewController {
             barScroller.setContentOffset(.zero, animated: false)
             UIView.animate(withDuration: 0.2) {
                 self.barButtons.forEach { $0.isHidden = self.barCollapsed }
-                if !self.barCollapsed { self.updateDisplayMenu() }
+                if !self.barCollapsed {
+                    self.updateDisplayMenu()
+                    self.updateResolutionMenu()
+                }
             }
             collapse?.configuration?.image = UIImage(systemName: barCollapsed ? "chevron.left" : "chevron.right")
         }, for: .primaryActionTriggered)
@@ -440,7 +454,7 @@ final class RemoteViewController: UIViewController {
             macButtons = [menu]
         }
 
-        barButtons = [close, keys, modeButton, screen, viewOnlyButton, fitButton, soundButton, micButton, displayButton, clipboard] + macButtons + [info]
+        barButtons = [close, keys, modeButton, screen, viewOnlyButton, fitButton, resolutionButton, soundButton, micButton, displayButton, clipboard] + macButtons + [info]
         bar.addArrangedSubviews(barButtons)
         bar.axis = .horizontal
         bar.alignment = .center
@@ -489,17 +503,7 @@ final class RemoteViewController: UIViewController {
             (.extend, "Use this as an extra screen", "rectangle.on.rectangle.angled"),
         ]
         fitButton.configuration?.image = UIImage(systemName: choices.first { $0.0 == fitHost }?.2 ?? "aspectratio")
-        let textSizes = UIMenu(title: "Text Size", image: UIImage(systemName: "textformat.size"), children: TextSize.ordered.map { size in
-            UIAction(title: size.title, state: size == Prefs.textSize ? .on : .off) { [weak self] _ in
-                guard let self, Prefs.textSize != size else { return }
-                Prefs.textSize = size
-                updateFitMenu()
-                showHint(size == .standard ? "The computer's screen is at its usual size"
-                                           : "Everything on the computer's screen is \(size.title.lowercased())")
-                if screenOn { startVideo() }
-            }
-        })
-        fitButton.menu = UIMenu(title: "Computer's screen", children: [UIMenu(options: .displayInline, children: choices.map { choice in
+        fitButton.menu = UIMenu(title: "Computer's screen", children: choices.map { choice in
             UIAction(title: choice.1, image: UIImage(systemName: choice.2), state: choice.0 == fitHost ? .on : .off) { [weak self] _ in
                 guard let self, fitHost != choice.0 else { return }
                 fitHost = choice.0
@@ -515,7 +519,27 @@ final class RemoteViewController: UIViewController {
                     startVideo()
                 }
             }
-        }), textSizes])
+        })
+    }
+
+    /// The resolutions the computer's main display can have while shown here, as it says
+    /// they are now. Hidden for computers that can't change it (Windows, Linux: no frames).
+    private func updateResolutionMenu() {
+        let main = model.displays.first(where: \.main)
+        resolutionButton.isHidden = barCollapsed || !screenOn || (main != nil && main?.bounds == nil)
+        let current = Prefs.textSize
+        resolutionButton.menu = UIMenu(title: "Resolution", children: TextSize.ordered.map { size in
+            UIAction(title: size.label(for: main, current: current),
+                     subtitle: size == .standard ? nil : size.scale > 1 ? "Bigger" : "More space",
+                     state: size == current ? .on : .off) { [weak self] _ in
+                guard let self, Prefs.textSize != size else { return }
+                Prefs.textSize = size
+                showHint(size == .standard ? "The computer is at its usual resolution"
+                         : size.scale > 1 ? "Everything on the computer is bigger" : "More space on the computer")
+                // The labels follow the computer's next display list.
+                if screenOn { startVideo() } else { updateResolutionMenu() }
+            }
+        })
     }
 
     private func updateDisplayMenu() {

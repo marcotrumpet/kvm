@@ -46,7 +46,7 @@ struct SettingsView: View {
                         Text("Fit it to this screen").tag(Int(HostFit.shape.rawValue))
                         Text("Use this as an extra screen").tag(Int(HostFit.extend.rawValue))
                     }
-                    Picker("Text size", selection: $textSize) {
+                    Picker("Resolution", selection: $textSize) {
                         ForEach(TextSize.ordered, id: \.rawValue) { size in
                             Text(size.title).tag(Int(size.rawValue))
                         }
