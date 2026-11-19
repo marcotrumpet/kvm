@@ -162,6 +162,7 @@ final class Core {
     var onMachineEvent: ((MachineEvent) -> Void)?
 
     init(stateDir: URL, logFile: URL, name: String) throws {
+        Core.useSystemProxy()
         kvm_init_logging(logFile.path)
         var err = [CChar](repeating: 0, count: 512)
         guard let node = kvm_node_start(stateDir.path, name, &err, err.count) else {
@@ -172,6 +173,22 @@ final class Core {
         var buf = [CChar](repeating: 0, count: 80)
         kvm_node_id(node, &buf, buf.count)
         id = String(cString: buf)
+    }
+
+    /// Apps don't inherit proxy environment variables: hand the system's HTTPS proxy (System
+    /// Settings > Network, or the iOS Wi-Fi settings) to the core that way, unless set.
+    private static func useSystemProxy() {
+        guard getenv("HTTPS_PROXY") == nil, getenv("HTTP_PROXY") == nil,
+              let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any] else { return }
+        #if os(macOS)
+        let (enable, host, port) = (kCFNetworkProxiesHTTPSEnable, kCFNetworkProxiesHTTPSProxy, kCFNetworkProxiesHTTPSPort)
+        #else
+        let (enable, host, port) = (kCFNetworkProxiesHTTPEnable, kCFNetworkProxiesHTTPProxy, kCFNetworkProxiesHTTPPort)
+        #endif
+        guard (settings[enable as String] as? Int) == 1, let proxy = settings[host as String] as? String, !proxy.isEmpty else { return }
+        let url = "http://\(proxy):\((settings[port as String] as? Int) ?? 8080)"
+        setenv("HTTPS_PROXY", url, 0)
+        Log.info("using the system proxy \(url)")
     }
 
     /// A second handle on `core`'s node for the link to remote controls (`setRemotes`). It

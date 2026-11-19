@@ -73,7 +73,11 @@ impl Node {
     pub async fn bind(state_dir: &Path, name: impl Into<String>) -> Result<Node> {
         let name = name.into();
         let secret_key = load_or_create_identity(state_dir)?;
+        // Behind a web proxy (offices), relay traffic goes through it: iroh's relays use
+        // HTTPS on port 443, which networks that block UDP usually still allow. The apps
+        // set HTTPS_PROXY from the system's settings when the environment has none.
         let endpoint = Endpoint::builder(presets::N0)
+            .proxy_from_env()
             .secret_key(secret_key)
             .alpns(vec![ALPN.to_vec(), PAIR_ALPN.to_vec()])
             .user_data_for_address_lookup(user_data(None))
