@@ -5,6 +5,8 @@
 #   macos/release.sh ["notes, one item per line"]    (default: commit subjects since the last release)
 # Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
+# With dist/KVM-windows-setup.exe present (the workflow's Windows job), it is signed and
+# released too, with its own feed appcast-windows.xml (WinSparkle).
 set -euo pipefail
 trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 [ "${TRACE:-0}" = 1 ] && set -x # TRACE=1: print each command
@@ -49,13 +51,17 @@ VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
 
 echo "==> Appcast"
 # Prints: sparkle:edSignature="..." length="..."
-{ set +x; } 2>/dev/null # never trace the key
-if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
-    SIGNATURE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$DIST/KVM-macos.zip")"
-else
-    SIGNATURE="$("$SPARKLE_DIR/bin/sign_update" "$DIST/KVM-macos.zip")"
-fi
-[ "${TRACE:-0}" = 1 ] && set -x
+sign() {
+    { set +x; } 2>/dev/null # never trace the key
+    if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
+        printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$1"
+    else
+        "$SPARKLE_DIR/bin/sign_update" "$1"
+    fi
+    [ "${TRACE:-0}" = 1 ] && set -x
+    return 0
+}
+SIGNATURE="$(sign "$DIST/KVM-macos.zip")"
 VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$SIGNATURE" \
 URL="https://github.com/$REPO/releases/download/$TAG/KVM-macos.zip" python3 - > "$DIST/appcast.xml" <<'EOF'
 import email.utils, html, os
@@ -78,12 +84,40 @@ print(f"""<?xml version="1.0" encoding="utf-8"?>
 </rss>""")
 EOF
 
+ASSETS=("$DIST/KVM-macos.zip" "$DIST/appcast.xml")
+WINDOWS="$DIST/KVM-windows-setup.exe"
+if [ -f "$WINDOWS" ]; then
+    echo "==> Windows appcast"
+    VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$(sign "$WINDOWS")" \
+    URL="https://github.com/$REPO/releases/download/$TAG/KVM-windows-setup.exe" python3 - > "$DIST/appcast-windows.xml" <<'WINDOWS_FEED'
+import email.utils, html, os
+items = "".join(f"<li>{html.escape(l.lstrip('- '))}</li>" for l in os.environ["NOTES"].splitlines() if l.strip())
+v = os.environ["VERSION"]
+print(f"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>KVM for Windows</title>
+    <item>
+      <title>KVM {v}</title>
+      <pubDate>{email.utils.formatdate()}</pubDate>
+      <sparkle:version>{v}</sparkle:version>
+      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>
+      <description><![CDATA[<ul>{items}</ul>]]></description>
+      <enclosure url="{os.environ['URL']}" sparkle:os="windows" sparkle:installerArguments="/SILENT /SP- /NOCANCEL"
+                 type="application/octet-stream" {os.environ['SIGNATURE']}/>
+    </item>
+  </channel>
+</rss>""")
+WINDOWS_FEED
+    ASSETS+=("$WINDOWS" "$DIST/appcast-windows.xml")
+fi
+
 if [ "${PUBLISH:-1}" != 1 ]; then
-    echo "==> Not publishing (PUBLISH=0): $DIST/KVM-macos.zip, $DIST/appcast.xml"
+    echo "==> Not publishing (PUBLISH=0): ${ASSETS[*]}"
     exit 0
 fi
 
 echo "==> GitHub release $TAG"
-gh release create "$TAG" "$DIST/KVM-macos.zip" "$DIST/appcast.xml" --repo "$REPO" \
+gh release create "$TAG" "${ASSETS[@]}" --repo "$REPO" \
     --target "$(git -C "$ROOT" rev-parse HEAD)" --title "KVM $VERSION" --notes "$NOTES"
 echo "==> Released $TAG; installed copies find it within a day, or with Check for Updates…"

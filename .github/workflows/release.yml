@@ -1,4 +1,5 @@
-# Builds, signs and publishes a Mac release that installed copies update to (Sparkle).
+# Builds, signs and publishes a release that installed copies update to: the Mac app
+# (Sparkle) and the Windows app (WinSparkle), from the same signing key.
 # Bump VERSION in macos/build.sh and push, then: Actions > Release > Run workflow, or
 #   gh workflow run release.yml -f notes="one item per line"
 #
@@ -29,7 +30,40 @@ permissions:
 concurrency: release
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "KVM_VERSION=$(sed -n 's/^VERSION="\${VERSION:-\(.*\)}"$/\1/p' macos/build.sh)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release -p kvm-desktop
+
+      - name: WinSparkle
+        shell: bash
+        run: |
+          curl -sL -o "$RUNNER_TEMP/winsparkle.zip" https://github.com/vslavik/winsparkle/releases/download/v0.9.4/WinSparkle-0.9.4.zip
+          echo "6037df37fc263bd1650a1c4949681a9d40ffe991d01f35892a406cb5d103c976  $RUNNER_TEMP/winsparkle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/winsparkle.zip" -d "$RUNNER_TEMP/winsparkle"
+          mkdir -p package
+          cp target/release/kvm.exe "$RUNNER_TEMP/winsparkle/WinSparkle-0.9.4/x64/Release/WinSparkle.dll" package/
+
+      - name: Installer
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DVersion=$env:KVM_VERSION /DSource=$env:GITHUB_WORKSPACE\package desktop\windows\kvm.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/KVM-windows-setup.exe
+
   mac:
+    needs: windows
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +100,11 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: dist
+
       - name: Build, sign, release
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -85,3 +124,5 @@ jobs:
           path: |
             dist/KVM-macos.zip
             dist/appcast.xml
+            dist/KVM-windows-setup.exe
+            dist/appcast-windows.xml

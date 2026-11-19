@@ -1,0 +1,17 @@
+# Builds and tests the Windows app on every push that touches it (the Mac and iOS apps are
+# built locally and by the release workflow).
+name: CI
+
+on:
+  push:
+    paths: ["core/**", "desktop/**", "Cargo.*", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["core/**", "desktop/**", "Cargo.*", ".github/workflows/ci.yml"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test -p kvm-platform -p kvm-desktop
+      - run: cargo build -p kvm-desktop
