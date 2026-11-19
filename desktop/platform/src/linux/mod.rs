@@ -83,7 +83,8 @@ pub mod capture {
         if on {
             let mask = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
             let _ = c.grab_keyboard(false, x.root, x11rb::CURRENT_TIME, GrabMode::ASYNC, GrabMode::ASYNC);
-            let _ = c.grab_pointer(false, x.root, mask, GrabMode::ASYNC, GrabMode::ASYNC, x11rb::NONE, x11rb::NONE, x11rb::CURRENT_TIME);
+            let cursor = invisible_cursor(x).unwrap_or(x11rb::NONE); // the parked pointer is hidden
+            let _ = c.grab_pointer(false, x.root, mask, GrabMode::ASYNC, GrabMode::ASYNC, x11rb::NONE, cursor, x11rb::CURRENT_TIME);
             let (cx, cy) = center(x);
             let _ = c.warp_pointer(x11rb::NONE, x.root, 0, 0, 0, 0, cx, cy);
         } else {
@@ -95,6 +96,20 @@ pub mod capture {
 
     pub fn is_remote() -> bool {
         REMOTE.load(Ordering::Acquire)
+    }
+
+    /// A cursor with nothing visible (a 1x1 pixmap, all masked out), made once.
+    fn invisible_cursor(x: &X) -> Option<u32> {
+        static CURSOR: OnceLock<Option<u32>> = OnceLock::new();
+        *CURSOR.get_or_init(|| {
+            let c = &x.conn;
+            let pixmap = c.generate_id().ok()?;
+            c.create_pixmap(1, pixmap, x.root, 1, 1).ok()?;
+            let cursor = c.generate_id().ok()?;
+            c.create_cursor(cursor, pixmap, pixmap, 0, 0, 0, 0, 0, 0, 0, 0).ok()?;
+            let _ = c.free_pixmap(pixmap);
+            Some(cursor)
+        })
     }
 }
 

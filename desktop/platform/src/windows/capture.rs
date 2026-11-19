@@ -2,7 +2,7 @@
 //! Always: the switching shortcut. While remote (controlling the peer): every key, button,
 //! wheel and motion goes to the delegate and is kept from Windows. The pointer is parked
 //! in the middle of the main screen meanwhile; motion is how far each event would have
-//! moved it from there.
+//! moved it from there, and a cursorless window under it hides it ([`super::ui`]).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,7 +55,10 @@ pub fn set_remote(on: bool) {
     if on {
         let center = POINT { x: unsafe { GetSystemMetrics(SM_CXSCREEN) } / 2, y: unsafe { GetSystemMetrics(SM_CYSCREEN) } / 2 };
         STATE.lock().unwrap().center = center;
-        let _ = unsafe { SetCursorPos(center.x, center.y) };
+        super::ui::hide_cursor(Some(center));
+        let _ = unsafe { SetCursorPos(center.x, center.y) }; // also makes Windows pick up the hidden cursor
+    } else {
+        super::ui::hide_cursor(None);
     }
     REMOTE.store(on, Ordering::Release);
 }

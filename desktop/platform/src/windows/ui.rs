@@ -2,22 +2,31 @@
 //! threads hand over menus and tooltips; the loop applies them on its timer.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tray_icon::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, KillTimer, MSG, PostThreadMessageW, SetTimer, TranslateMessage, WM_QUIT, WM_TIMER,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_TOPMOST, KillTimer, LWA_ALPHA, MSG,
+    PostThreadMessageW, RegisterClassW, SW_HIDE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindowAsync, TranslateMessage, WM_QUIT, WM_SETCURSOR,
+    WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
+use windows::core::w;
 
 use super::capture;
 use crate::{Delegate, Hotkey, MenuEntry};
 
 static PENDING: Mutex<Pending> = Mutex::new(Pending { menu: None, tooltip: None });
 static UI_THREAD: AtomicU32 = AtomicU32::new(0);
+/// A small, almost transparent window without a cursor, under the parked pointer while
+/// controlling the peer, so the pointer doesn't sit in the middle of the screen.
+static CURSOR_HIDER: AtomicIsize = AtomicIsize::new(0);
+const HIDER_SIZE: i32 = 64;
 
 struct Pending {
     menu: Option<Vec<MenuEntry>>,
@@ -38,6 +47,56 @@ pub fn set_tooltip(text: &str) {
     PENDING.lock().unwrap().tooltip = Some(text.to_string());
 }
 
+/// Shows the cursor hider centred on `at`, or hides it. Any thread.
+pub(super) fn hide_cursor(at: Option<POINT>) {
+    let hwnd = HWND(CURSOR_HIDER.load(Ordering::Acquire) as *mut _);
+    if hwnd.is_invalid() {
+        return;
+    }
+    unsafe {
+        match at {
+            Some(p) => {
+                let flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS;
+                let half = HIDER_SIZE / 2;
+                let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), p.x - half, p.y - half, HIDER_SIZE, HIDER_SIZE, flags);
+            }
+            None => {
+                let _ = ShowWindowAsync(hwnd, SW_HIDE);
+            }
+        }
+    }
+}
+
+unsafe extern "system" fn hider_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_SETCURSOR {
+        unsafe { SetCursor(None) };
+        return LRESULT(1);
+    }
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+fn create_cursor_hider() {
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else { return };
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(hider_proc),
+            hInstance: module.into(),
+            lpszClassName: w!("KVMCursorHider"),
+            ..Default::default()
+        };
+        RegisterClassW(&class);
+        let style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+        let Ok(hwnd) = CreateWindowExW(
+            style, w!("KVMCursorHider"), None, WS_POPUP, 0, 0, HIDER_SIZE, HIDER_SIZE, None, None, Some(module.into()), None,
+        ) else {
+            return;
+        };
+        // Alpha 1: invisible, but still under the pointer (alpha 0 would let it through).
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA);
+        CURSOR_HIDER.store(hwnd.0 as isize, Ordering::Release);
+    }
+}
+
 /// Ends [`run`]. Any thread.
 pub fn quit() {
     let thread = UI_THREAD.load(Ordering::Acquire);
@@ -50,6 +109,7 @@ pub fn quit() {
 pub fn run(delegate: Arc<dyn Delegate>, hotkey: Hotkey) -> anyhow::Result<()> {
     UI_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
     capture::set_hotkey(hotkey);
+    create_cursor_hider();
     let _hooks = capture::install(delegate.clone())?;
     let tray = TrayIconBuilder::new()
         .with_icon(icon())
