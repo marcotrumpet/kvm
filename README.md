@@ -116,8 +116,9 @@ menu (or from the Mac's menu bar icon to this computer); they arrive in Download
 either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
 the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
 display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
-… Screen in the tray; click the picture to control the Mac there, unless View Only is on). Not yet: the Linux screen
-either way, the microphone.
+… Screen in the tray; click the picture to control the Mac there, unless View Only is on). The
+Linux screen can be shared too (X11 capture, encoded with OpenH264). Not yet: viewing the Mac's
+screen on Linux, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
@@ -137,6 +138,12 @@ libei and portals). Unpack `KVM-linux-x86_64.tar.gz` and run `./install.sh` (ins
 `~/.local/bin`, adds a menu entry and starts it at sign-in). The tray needs a
 StatusNotifierItem host (KDE, Xfce, GNOME with the AppIndicator extension); dialogs use
 zenity or kdialog. It checks daily for a new release and offers the download page.
+
+Linux has no system H.264 encoder, so screen sharing uses Cisco's OpenH264, compiled from
+source into the app (the `h264` feature). H.264 is covered by patents, and Cisco pays the
+royalties only for its own prebuilt OpenH264 binaries, not for builds from source: keep that
+in mind before distributing it. Loading Cisco's binary at runtime instead is a possible
+change.
 
 Locally: `cargo run -p kvm-desktop`.
 

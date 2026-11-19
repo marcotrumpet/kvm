@@ -3,6 +3,8 @@
 //! without libei and portals).
 
 mod keymap;
+#[cfg(feature = "h264")]
+pub mod screen;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
