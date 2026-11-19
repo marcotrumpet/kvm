@@ -83,6 +83,7 @@ final class RemoteViewController: UIViewController {
     private var heldKeys: Set<UInt16> = []
     private var repeatTimer: Timer?
     private var mouseRemainder = CGPoint.zero
+    private var lastMouseMove: CFTimeInterval = 0
     private var mouseObservers: [NSObjectProtocol] = []
 
     init(model: AppModel) {
@@ -995,12 +996,26 @@ final class RemoteViewController: UIViewController {
         }
     }
 
+    /// Raw mouse counts get no acceleration from iPadOS while the pointer is locked, nor
+    /// from the computer (it moves by what it is sent): about 1:1 when slow, up to 3.5x when
+    /// fast, scaled by the pointer speed setting (1 at its default).
+    private func mouseGain(for d: CGPoint) -> CGFloat {
+        let now = CACurrentMediaTime()
+        // The first move after a pause counts as one frame's worth, not as very slow.
+        let dt = min(max(now - lastMouseMove, 1.0 / 1000), 1.0 / 60)
+        lastMouseMove = now
+        let speed = hypot(d.x, d.y) / dt
+        return Prefs.pointerSpeed / 1.2 * (1 + min(speed / 1000, 2.5))
+    }
+
     private func attach(_ mouse: GCMouse) {
         guard let input = mouse.mouseInput else { return }
         input.mouseMovedHandler = { [weak self] _, dx, dy in
             guard let self, pointerLocked else { return }
             // Game controller deltas point up; screen coordinates point down.
-            let x = CGFloat(dx) + mouseRemainder.x, y = -CGFloat(dy) + mouseRemainder.y
+            let d = CGPoint(x: CGFloat(dx), y: -CGFloat(dy))
+            let gain = mouseGain(for: d)
+            let x = d.x * gain + mouseRemainder.x, y = d.y * gain + mouseRemainder.y
             let (ix, iy) = (x.rounded(.towardZero), y.rounded(.towardZero))
             mouseRemainder = CGPoint(x: x - ix, y: y - iy)
             if ix != 0 || iy != 0 { core?.sendMotion(dx: Int64(ix), dy: Int64(iy)) }

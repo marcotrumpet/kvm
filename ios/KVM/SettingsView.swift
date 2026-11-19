@@ -33,7 +33,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Control")
                 } footer: {
-                    Text("Trackpad moves the pointer like a laptop's trackpad; direct touch clicks where you tap on the picture.")
+                    Text("Trackpad moves the pointer like a laptop's trackpad; direct touch clicks where you tap on the picture. Pointer speed is for trackpad mode and for a mouse or trackpad connected to an iPad.")
                 }
 
                 Section("Screen") {
