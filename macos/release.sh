@@ -5,6 +5,8 @@
 #   macos/release.sh ["notes, one item per line"]    (default: commit subjects since the last release)
 # Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
+# With dist/KVM-windows-setup.exe or dist/KVM-linux-x86_64.tar.gz present (the workflow's
+# Windows and Linux jobs), they are signed and released too, each with its own feed.
 set -euo pipefail
 trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 [ "${TRACE:-0}" = 1 ] && set -x # TRACE=1: print each command
@@ -49,41 +51,58 @@ VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
 
 echo "==> Appcast"
 # Prints: sparkle:edSignature="..." length="..."
-{ set +x; } 2>/dev/null # never trace the key
-if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
-    SIGNATURE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$DIST/KVM-macos.zip")"
-else
-    SIGNATURE="$("$SPARKLE_DIR/bin/sign_update" "$DIST/KVM-macos.zip")"
-fi
-[ "${TRACE:-0}" = 1 ] && set -x
-VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$SIGNATURE" \
-URL="https://github.com/$REPO/releases/download/$TAG/KVM-macos.zip" python3 - > "$DIST/appcast.xml" <<'EOF'
+sign() {
+    { set +x; } 2>/dev/null # never trace the key
+    if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
+        printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$1"
+    else
+        "$SPARKLE_DIR/bin/sign_update" "$1"
+    fi
+    [ "${TRACE:-0}" = 1 ] && set -x
+    return 0
+}
+# feed <file> <title> <archive> [enclosure attributes] [item elements]: a one-item appcast
+# for <archive>, published next to it.
+feed() {
+    TITLE="$2" VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$(sign "$DIST/$3")" ATTRS="${4:-}" EXTRA="${5:-}" \
+    URL="https://github.com/$REPO/releases/download/$TAG/$3" python3 - > "$DIST/$1" <<'FEED'
 import email.utils, html, os
 items = "".join(f"<li>{html.escape(l.lstrip('- '))}</li>" for l in os.environ["NOTES"].splitlines() if l.strip())
 v = os.environ["VERSION"]
 print(f"""<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>KVM</title>
+    <title>{os.environ['TITLE']}</title>
     <item>
       <title>KVM {v}</title>
       <pubDate>{email.utils.formatdate()}</pubDate>
       <sparkle:version>{v}</sparkle:version>
-      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>{os.environ['EXTRA']}
       <description><![CDATA[<ul>{items}</ul>]]></description>
-      <enclosure url="{os.environ['URL']}" type="application/octet-stream" {os.environ['SIGNATURE']}/>
+      <enclosure url="{os.environ['URL']}" {os.environ['ATTRS']} type="application/octet-stream" {os.environ['SIGNATURE']}/>
     </item>
   </channel>
 </rss>""")
-EOF
+FEED
+    ASSETS+=("$DIST/$3" "$DIST/$1")
+}
+
+ASSETS=()
+feed appcast.xml "KVM" KVM-macos.zip "" $'\n      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>'
+if [ -f "$DIST/KVM-windows-setup.exe" ]; then
+    feed appcast-windows.xml "KVM for Windows" KVM-windows-setup.exe \
+        'sparkle:os="windows" sparkle:installerArguments="/SILENT /SP- /NOCANCEL"'
+fi
+if [ -f "$DIST/KVM-linux-x86_64.tar.gz" ]; then
+    feed appcast-linux.xml "KVM for Linux" KVM-linux-x86_64.tar.gz 'sparkle:os="linux"'
+fi
 
 if [ "${PUBLISH:-1}" != 1 ]; then
-    echo "==> Not publishing (PUBLISH=0): $DIST/KVM-macos.zip, $DIST/appcast.xml"
+    echo "==> Not publishing (PUBLISH=0): ${ASSETS[*]}"
     exit 0
 fi
 
 echo "==> GitHub release $TAG"
-gh release create "$TAG" "$DIST/KVM-macos.zip" "$DIST/appcast.xml" --repo "$REPO" \
+gh release create "$TAG" "${ASSETS[@]}" --repo "$REPO" \
     --target "$(git -C "$ROOT" rev-parse HEAD)" --title "KVM $VERSION" --notes "$NOTES"
 echo "==> Released $TAG; installed copies find it within a day, or with Check for Updates…"

@@ -1,8 +1,8 @@
 # KVM
 
 Share one mouse and keyboard between two computers, peer to peer, on the same network or
-over the internet. A menu bar app on macOS, plus an iPhone and iPad app that controls a Mac;
-Windows and Linux are planned.
+over the internet. A menu bar app on macOS, a tray app on Windows and Linux (untested on
+real machines so far, see below), plus an iPhone and iPad app that controls a computer.
 
 - **Switching**: a global shortcut, or hovering over the other computer's screen in the viewer.
 - **Direct connections** via [iroh](https://github.com/n0-computer/iroh) (QUIC, hole punching,
@@ -33,6 +33,9 @@ Windows and Linux are planned.
 | `macos/` | Swift menu bar app: capture, injection, UI, screen capture and display. |
 | `macos/Microphone/` | "KVM Microphone" Core Audio driver (C): a hidden output device looped into an input for call apps. |
 | `ios/` | iPhone/iPad remote control (Xcode project); shares `Core.swift` and `VideoFrames.swift` with `macos/`. |
+| `desktop/app/` | Windows and Linux tray app in Rust, straight on the core: pairing, control, clipboard. |
+| `desktop/platform/` | Its OS layer (Windows: hooks, SendInput, WinSparkle; Linux: X11 grabs, XTest, StatusNotifierItem tray), kept free of the core so `cargo check -p kvm-platform --target x86_64-pc-windows-msvc` (or `x86_64-unknown-linux-gnu`) works anywhere. |
+| `desktop/windows/`, `desktop/linux/` | Inno Setup installer script; Linux install script and desktop entry. |
 | `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |
 
@@ -89,6 +92,49 @@ swiping up show Mission Control, down App Exposé, left and right switch Spaces.
 displays, pushing the pointer past the left or right edge of the one shown switches to the
 next. An iPad trackpad or mouse moves the Mac's pointer directly (raw deltas when iPadOS
 locks the pointer to the app, otherwise the iPad pointer points at the picture).
+
+## Windows and Linux
+
+> **Untested on real machines.** The author has no Windows PC or Linux desktop, so these
+> apps have never been run by a person. They build, and their tests pass, on GitHub's
+> Windows and Ubuntu machines (CI), the OS layer type-checks against the real Windows and X11
+> APIs, and the screen stream was checked to decode in the Mac viewer, but pairing, input,
+> the clipboard, files and screen sharing have not been tried on a PC. Expect rough edges;
+> reports and logs (tray menu > Show Log) are welcome.
+
+A tray app that pairs with a Mac as its other computer: share mouse and keyboard both ways
+(Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard (text). The Mac's Command
+keys act as Ctrl on Windows (and Ctrl as Command the other way), so shortcuts stay under
+the same fingers; the tray menu turns that off. The iPhone and iPad app can control it too
+(mouse, keyboard, typed text on Windows): Allow Pairing in the tray menu, then in the app tap
++ > Enter Computer ID with the ID from Pair Over the Internet > Copy This Computer's ID;
+paired ones are listed (and removed) under iPhone and iPad. Files: Send Files in the tray
+menu (or from the Mac's menu bar icon to this computer); they arrive in Downloads. Locking
+either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
+the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
+display; Stop Sharing This Screen in the tray). Not yet: sharing the Linux screen, viewing the
+Mac's screen from Windows, pasting files copied on the Mac, the microphone.
+
+To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
+the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
+Pairing replaces the Mac's current other computer.
+
+Where mDNS is blocked (guest and office networks), pair by ID instead: Pair Over the
+Internet > Copy This Computer's ID, or copy the Mac's ID (KVM Settings > Pair over the
+internet) and choose Pair With the ID on the Clipboard. Behind a web proxy, the system's
+proxy setting is used (Windows' Internet Settings; GNOME's on Linux, or `HTTPS_PROXY`). If
+Windows Firewall asks, allow KVM on private networks.
+
+Windows: the installer (per user, no admin) and updates (WinSparkle, from the same GitHub
+releases and key as the Mac app) come from the release workflow.
+
+Linux: X11 sessions only for now (Wayland has no global input capture or injection without
+libei and portals). Unpack `KVM-linux-x86_64.tar.gz` and run `./install.sh` (installs to
+`~/.local/bin`, adds a menu entry and starts it at sign-in). The tray needs a
+StatusNotifierItem host (KDE, Xfce, GNOME with the AppIndicator extension); dialogs use
+zenity or kdialog. It checks daily for a new release and offers the download page.
+
+Locally: `cargo run -p kvm-desktop`.
 
 ## Testing without the app
 

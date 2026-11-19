@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "ffi", "awdl-helper"]
+members = ["core", "ffi", "awdl-helper", "desktop/platform", "desktop/app"]
 
 [profile.release]
 strip = true

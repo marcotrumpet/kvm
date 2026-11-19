@@ -1,0 +1,19 @@
+[package]
+name = "kvm-desktop"
+version = "0.1.0" # the released version comes from KVM_VERSION (macos/build.sh's VERSION)
+edition = "2024"
+description = "KVM for Windows and Linux (X11): share mouse, keyboard and clipboard with a Mac."
+
+[[bin]]
+name = "kvm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+kvm-core = { path = "../../core" }
+kvm-platform = { path = "../platform" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
