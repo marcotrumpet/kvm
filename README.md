@@ -36,6 +36,21 @@ Windows and Linux are planned.
 | `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |
 
+## Networks and firewalls
+
+Connections are direct whenever possible: on the same network (found by mDNS), or across the
+internet by UDP hole punching. Where UDP is blocked or hole punching fails, traffic goes
+through iroh's relays over HTTPS on port 443, like web browsing, so it gets through most
+office, hotel and public Wi-Fi networks (slower; the menu shows when it's relayed).
+
+- **Web proxy**: used automatically when the system has one (System Settings > Network >
+  Details > Proxies on the Mac, the Wi-Fi settings on iPhone and iPad), or `HTTPS_PROXY`.
+- **mDNS blocked** (guest and office networks): machines don't show up automatically, but
+  pairing by ID ("Pair over the internet" in KVM Settings) works, and once paired the
+  computers find each other by ID wherever they are.
+- **macOS firewall**: allow KVM if asked (System Settings > Network > Firewall).
+- Networks that only allow approved services block it by design: ask whoever runs them.
+
 ## Build (macOS)
 
 Needs Rust (`rustup`) and Xcode.
