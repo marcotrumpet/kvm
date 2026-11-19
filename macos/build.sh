@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 DIST="$ROOT/dist"
 APP="$DIST/KVM.app"
-VERSION="${VERSION:-0.17.1}"
+VERSION="${VERSION:-0.18.0}"
 # Sparkle updates: release.sh publishes appcast.xml with each GitHub release; the key pair
 # was made with Sparkle's generate_keys (private half in the login keychain).
 FEED_URL="https://github.com/marcotrumpet/kvm/releases/latest/download/appcast.xml"

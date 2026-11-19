@@ -12,7 +12,7 @@ real machines so far, see below), plus an iPhone and iPad app that controls a co
 - **Clipboard**: text, rich text, images, and files copied in Finder (pasted on demand).
 - **File sharing**: drop on the menu bar icon or the viewer; permissions, links and app bundles survive.
 - **Screen viewer**: hardware HEVC or H.264, adaptive bitrate and quality, the host's sound,
-  multiple displays, full-screen 1:1. The host can re-lay out its desktop to the viewer's
+  multiple displays, full-screen 1:1, view only (just watch). The host can re-lay out its desktop to the viewer's
   size or shape, or add the viewer as an extra screen (iPad, like Sidecar).
 - **Microphone**: the controlling computer's, iPhone's or iPad's microphone becomes "KVM
   Microphone" on the controlled Mac, for calls there (a small Core Audio driver).
@@ -74,7 +74,9 @@ The app needs Accessibility and Input Monitoring, plus Screen Recording to share
 A remote control for a Mac: its screen, the touch screen as a trackpad (or direct touch on the
 picture), the on-screen keyboard (typed text arrives right whatever the Mac's layout, plus a
 bar with esc, tab, arrows and sticky ⌃⌥⌘⇧), and on iPad a hardware keyboard and a mouse or
-trackpad (pointer locked). It is paired next to the Mac's other computer, not instead of it.
+trackpad (pointer locked). The eye button (or Settings > View only) just watches: the Mac
+isn't controlled until it's turned off. It is paired next to the Mac's other computer, not
+instead of it.
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim   # once
@@ -114,7 +116,7 @@ menu (or from the Mac's menu bar icon to this computer); they arrive in Download
 either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
 the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
 display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
-… Screen in the tray; click the picture to control the Mac there). Not yet: the Linux screen
+… Screen in the tray; click the picture to control the Mac there, unless View Only is on). Not yet: the Linux screen
 either way, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in

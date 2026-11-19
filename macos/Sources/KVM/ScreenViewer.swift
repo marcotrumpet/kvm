@@ -31,6 +31,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     private let resizeHost = NSButton(checkboxWithTitle: "Resize host", target: nil, action: nil)
     private let sound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
     private let hoverControl = NSButton(checkboxWithTitle: "Control on hover", target: nil, action: nil)
+    private let viewOnly = NSButton(checkboxWithTitle: "View only", target: nil, action: nil)
     private lazy var fullScreen = NSButton(
         image: NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Full Screen")!,
         target: self, action: #selector(toggleFullScreen))
@@ -152,6 +153,13 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         hoverControl.action = #selector(hoverControlChanged)
         hoverControl.controlSize = .small
         hoverControl.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        hoverControl.isEnabled = !Settings.viewerViewOnly
+        viewOnly.toolTip = "Only watch: clicking or hovering over the picture doesn't take control"
+        viewOnly.state = Settings.viewerViewOnly ? .on : .off
+        viewOnly.target = self
+        viewOnly.action = #selector(viewOnlyChanged)
+        viewOnly.controlSize = .small
+        viewOnly.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         stats.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         stats.textColor = .secondaryLabelColor
         stats.toolTip = "The stream's resolution, frames per second and data rate"
@@ -168,7 +176,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         fullScreen.bezelStyle = .accessoryBarAction
         fullScreen.isBordered = false
         fullScreen.toolTip = "Full screen, one-to-one"
-        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, sound, hoverControl, spacer, stats, fullScreen])
+        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, sound, hoverControl, viewOnly, spacer, stats, fullScreen])
         bar.orientation = .horizontal
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
@@ -252,6 +260,16 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     @objc private func hoverControlChanged() {
         Settings.viewerHoverControl = hoverControl.state == .on
         onPictureMoved?()
+    }
+
+    /// Main thread; view only was turned on or off.
+    var onViewOnlyChanged: (() -> Void)?
+
+    @objc private func viewOnlyChanged() {
+        Settings.viewerViewOnly = viewOnly.state == .on
+        hoverControl.isEnabled = !Settings.viewerViewOnly
+        onPictureMoved?() // re-arms or disarms hover
+        onViewOnlyChanged?()
     }
 
     func windowDidMove(_ notification: Notification) {

@@ -356,6 +356,9 @@ impl App {
             ViewerEvent::Resized { width, height } => self.request_view((width, height), false),
             ViewerEvent::Clicked { x, y } => {
                 // Clicking the picture takes control, with the peer's pointer where it was clicked.
+                if self.config.lock().unwrap().view_only {
+                    return;
+                }
                 if self.mode() == Mode::Local {
                     self.control_peer();
                 }
@@ -897,6 +900,7 @@ impl App {
             } else {
                 MenuEntry::Item { id: "view".into(), label: format!("View {peer}'s Screen"), enabled: connected, checked: None }
             });
+            menu.push(MenuEntry::check("view-only", "View Only (Clicking Doesn't Take Control)", config.view_only));
         }
         menu.push(MenuEntry::item("received", "Show Received Files"));
         if self.sharing() {
@@ -961,11 +965,12 @@ impl Delegate for App {
                 self.set_pairing_mode(on);
             }
             "unpair" => self.unpair(),
-            "clipboard" | "swap" | "lock" => {
+            "clipboard" | "swap" | "lock" | "view-only" => {
                 let mut config = self.config.lock().unwrap();
                 let setting = match id {
                     "clipboard" => &mut config.share_clipboard,
                     "swap" => &mut config.swap_ctrl_cmd,
+                    "view-only" => &mut config.view_only,
                     _ => &mut config.lock_together,
                 };
                 *setting = !*setting;

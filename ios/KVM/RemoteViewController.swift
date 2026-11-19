@@ -370,6 +370,15 @@ final class RemoteViewController: UIViewController {
             if !sound { model.stopAudio() }
             if screenOn { startVideo() }
         }, for: .primaryActionTriggered)
+        let viewOnlyButton = button(Prefs.viewOnly ? "eye.fill" : "eye", "View only") {}
+        viewOnlyButton.addAction(UIAction { [weak self, weak viewOnlyButton] _ in
+            guard let self else { return }
+            let on = !Prefs.viewOnly
+            model.setViewOnly(on)
+            viewOnlyButton?.configuration?.image = UIImage(systemName: on ? "eye.fill" : "eye")
+            if on { keyboard.resignFirstResponder() }
+            showHint(on ? "View only: touches and keys don't reach the computer" : "Controlling the computer again")
+        }, for: .primaryActionTriggered)
         let micButton = button(Prefs.sendMicrophone ? "mic" : "mic.slash", "Microphone") {}
         micButton.addAction(UIAction { [weak self, weak micButton] _ in
             guard let self else { return }
@@ -430,7 +439,7 @@ final class RemoteViewController: UIViewController {
             macButtons = [menu]
         }
 
-        barButtons = [close, keys, modeButton, screen, fitButton, soundButton, micButton, displayButton, clipboard] + macButtons + [info]
+        barButtons = [close, keys, modeButton, screen, viewOnlyButton, fitButton, soundButton, micButton, displayButton, clipboard] + macButtons + [info]
         bar.addArrangedSubviews(barButtons)
         bar.axis = .horizontal
         bar.alignment = .center
@@ -594,6 +603,10 @@ final class RemoteViewController: UIViewController {
     }
 
     private func toggleKeyboard() {
+        if Prefs.viewOnly, !keyboard.isFirstResponder {
+            showHint("View only is on: tap the eye to control the computer")
+            return
+        }
         if keyboard.isFirstResponder {
             _ = keyboard.resignFirstResponder()
         } else {
@@ -1169,6 +1182,12 @@ enum Prefs {
             return defaults.bool(forKey: "fitHost") ? .shape : .off // the earlier on/off setting
         }
         set { defaults.set(Int(newValue.rawValue), forKey: "hostFit") }
+    }
+
+    /// Only watch the computer's screen: this device doesn't take control of it.
+    static var viewOnly: Bool {
+        get { defaults.bool(forKey: "viewOnly") }
+        set { defaults.set(newValue, forKey: "viewOnly") }
     }
 
     /// Send this device's microphone to the computer while controlling it (it appears there

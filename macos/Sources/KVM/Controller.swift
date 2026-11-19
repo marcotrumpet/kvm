@@ -70,6 +70,10 @@ final class Controller {
             state.viewingPeer = false
         }
         viewer.onClick = { [unowned self] point in controlFromViewer(at: point) }
+        // Turning view only on while controlling from the viewer hands control back.
+        viewer.onViewOnlyChanged = { [unowned self] in
+            if Settings.viewerViewOnly, viaViewer.withLock({ $0 }) { returnToLocal(notifyPeer: true) }
+        }
         viewer.onPictureMoved = { [unowned self] in updateHoverRect() }
         capture.onHoverEnter = { [unowned self] location in
             DispatchQueue.main.async { self.hoverEntered(at: location) }
@@ -123,12 +127,13 @@ final class Controller {
 
     /// Main thread: tell the event tap where the viewer's picture is.
     private func updateHoverRect() {
-        capture.setHoverRect(Settings.viewerHoverControl && state.connected ? viewer.pictureRect : nil)
+        let hover = Settings.viewerHoverControl && !Settings.viewerViewOnly && state.connected
+        capture.setHoverRect(hover ? viewer.pictureRect : nil)
     }
 
     /// Main thread: the pointer entered the picture.
     private func hoverEntered(at location: CGPoint) {
-        guard Settings.viewerHoverControl, NSEvent.pressedMouseButtons == 0,
+        guard Settings.viewerHoverControl, !Settings.viewerViewOnly, NSEvent.pressedMouseButtons == 0,
               viewer.isFrontmost(at: location), let point = viewer.fraction(at: location) else { return }
         controlFromViewer(at: point)
     }
@@ -136,6 +141,7 @@ final class Controller {
     /// Takes control like the hotkey does, from a point in the viewer's picture: the peer's
     /// pointer starts there, stays on the viewed display, and leaving it hands control back.
     private func controlFromViewer(at point: CGPoint) {
+        guard !Settings.viewerViewOnly else { return }
         if mode.withLock({ $0 }) == .local {
             controlPeer()
         }

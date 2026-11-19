@@ -20,6 +20,8 @@ pub struct Config {
     pub swap_ctrl_cmd: bool,
     /// Locking either computer locks the other (like the Mac's setting).
     pub lock_together: bool,
+    /// The viewer only shows the peer's screen: clicking it doesn't take control.
+    pub view_only: bool,
     pub hotkey: HotkeyConfig,
 }
 
@@ -32,6 +34,7 @@ impl Default for Config {
             share_clipboard: true,
             swap_ctrl_cmd: true,
             lock_together: true,
+            view_only: false,
             hotkey: HotkeyConfig::from(Hotkey::DEFAULT),
         }
     }

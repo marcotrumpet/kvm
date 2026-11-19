@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage("videoQuality") private var quality = VideoQuality.auto.rawValue
     @AppStorage("sound") private var sound = true
     @AppStorage("sendMicrophone") private var sendMicrophone = false
+    @AppStorage("viewOnly") private var viewOnly = false
     @State private var tipsReset = false
 
     var body: some View {
@@ -50,6 +51,7 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("Play the computer's sound", isOn: $sound)
+                    Toggle("View only", isOn: $viewOnly)
                 }
 
                 Section {

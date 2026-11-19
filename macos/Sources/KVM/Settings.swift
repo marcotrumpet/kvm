@@ -148,6 +148,12 @@ enum Settings {
     }
 
     /// Take control of the peer when the pointer enters its picture in the screen viewer.
+    /// The screen viewer only shows the screen: no control from clicking or hovering.
+    static var viewerViewOnly: Bool {
+        get { defaults.bool(forKey: "viewerViewOnly") }
+        set { defaults.set(newValue, forKey: "viewerViewOnly") }
+    }
+
     static var viewerHoverControl: Bool {
         get { defaults.object(forKey: "viewerHoverControl") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "viewerHoverControl") }

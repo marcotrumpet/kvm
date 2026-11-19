@@ -162,6 +162,14 @@ final class AppModel: ObservableObject {
         _ = core.dialPeer(active.id)
     }
 
+    /// Only watch: give control back (the computer then ignores this device's input), or
+    /// take it again.
+    func setViewOnly(_ on: Bool) {
+        Prefs.viewOnly = on
+        guard link == .connected else { return }
+        if on { core?.leave() } else { core?.enter() }
+    }
+
     func setMicrophone(_ on: Bool) {
         Prefs.sendMicrophone = on
         updateMicrophone()
@@ -272,7 +280,7 @@ final class AppModel: ObservableObject {
                 disconnect()
             }
         case .connected(let name, let peer):
-            core?.enter()
+            if !Prefs.viewOnly { core?.enter() }
             DispatchQueue.main.async { [self] in
                 link = .connected
                 updateMicrophone()
@@ -284,7 +292,7 @@ final class AppModel: ObservableObject {
                 if let videoParams { core?.requestVideo(videoParams) }
             }
         case .recovered:
-            core?.enter() // a stall hands control back; take it again
+            if !Prefs.viewOnly { core?.enter() } // a stall hands control back; take it again
             DispatchQueue.main.async {
                 self.link = .connected
                 self.updateMicrophone()
