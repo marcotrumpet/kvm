@@ -81,6 +81,10 @@ pub mod clipboard {
             None
         }
         pub fn set_text(&mut self, _text: &str) {}
+        pub fn files(&mut self) -> Option<Vec<std::path::PathBuf>> {
+            None
+        }
+        pub fn set_files(&mut self, _paths: &[std::path::PathBuf]) {}
     }
 }
 

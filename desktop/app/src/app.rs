@@ -44,9 +44,21 @@ pub struct App {
     state: Mutex<State>,
     injector: Injector,
     /// Clipboard text received from the peer, to set on the clipboard thread.
-    clipboard_in: std::sync::mpsc::Sender<String>,
-    clipboard_rx: Mutex<Option<std::sync::mpsc::Receiver<String>>>,
+    clipboard_in: std::sync::mpsc::Sender<ClipboardIn>,
+    clipboard_rx: Mutex<Option<std::sync::mpsc::Receiver<ClipboardIn>>>,
 }
+
+/// For the clipboard thread.
+enum ClipboardIn {
+    Text(String),
+    /// Files copied on the peer, coming into the clipboard cache as `transfer`.
+    Files { transfer: u64, names: Vec<String> },
+    /// All of a clipboard transfer's files are in the cache.
+    Arrived(u64),
+}
+
+/// Copied files above this aren't sent ahead (the Mac's default limit).
+const CLIPBOARD_FILE_LIMIT: u64 = 500 * 1024 * 1024;
 
 struct State {
     mode: Mode,
@@ -212,7 +224,7 @@ impl App {
             Event::PointerAbs { x, y, display } if controlling() => self.injector.warp(x, y, display),
             Event::Clipboard(payload) => {
                 if let Some(text) = clipboard::decode_text(&payload) {
-                    let _ = self.clipboard_in.send(text);
+                    let _ = self.clipboard_in.send(ClipboardIn::Text(text));
                 }
             }
             _ => {}
@@ -460,11 +472,18 @@ impl App {
             Event::Text(text) if controlled() => self.injector.text(&text),
             Event::PointerAbs { x, y, display } if controlled() => self.injector.warp(x, y, display),
             Event::Clipboard(payload) => {
-                if self.config.lock().unwrap().share_clipboard
-                    && let Some(text) = clipboard::decode_text(&payload)
-                {
-                    let _ = self.clipboard_in.send(text);
+                if self.config.lock().unwrap().share_clipboard {
+                    let message = match clipboard::decode_files(&payload) {
+                        Some((transfer, names)) => Some(ClipboardIn::Files { transfer, names }),
+                        None => clipboard::decode_text(&payload).map(ClipboardIn::Text),
+                    };
+                    if let Some(message) = message {
+                        let _ = self.clipboard_in.send(message);
+                    }
                 }
+            }
+            Event::FileReceived { transfer, index, count, clipboard: true, .. } if index + 1 == count => {
+                let _ = self.clipboard_in.send(ClipboardIn::Arrived(transfer));
             }
             Event::LockRequested => {
                 if self.config.lock().unwrap().lock_together {
@@ -617,25 +636,82 @@ impl App {
                 return;
             }
         };
-        let mut last = board.text();
+        let cache = crate::config::clipboard_dir();
+        let mut last_text = board.text();
+        let mut last_files = board.files();
+        // Files copied on the peer: announced, and the transfers whose files are all here.
+        let mut offered: Option<(u64, Vec<String>)> = None;
+        let mut arrived = std::collections::HashSet::new();
         loop {
-            while let Ok(text) = incoming.try_recv() {
-                board.set_text(&text);
-                last = Some(text); // not sent back
-            }
-            std::thread::sleep(Duration::from_millis(300));
-            let now = board.text();
-            if now == last {
-                continue;
-            }
-            last = now.clone();
-            let share = self.config.lock().unwrap().share_clipboard;
-            let connected = self.state.lock().unwrap().connected;
-            if let (true, true, Some(text), Some(link)) = (share, connected, now, self.link()) {
-                if !text.is_empty() {
-                    link.send_clipboard(clipboard::encode_text(&text));
+            while let Ok(message) = incoming.try_recv() {
+                match message {
+                    ClipboardIn::Text(text) => {
+                        board.set_text(&text);
+                        last_text = Some(text); // not sent back
+                        last_files = None;
+                    }
+                    ClipboardIn::Files { transfer, names } => {
+                        remove_cached_except(&cache, transfer);
+                        offered = Some((transfer, names));
+                    }
+                    ClipboardIn::Arrived(transfer) => {
+                        arrived.insert(transfer);
+                    }
+                }
+                if let Some((transfer, names)) = &offered
+                    && arrived.contains(transfer)
+                {
+                    let paths: Vec<PathBuf> = names.iter().map(|n| cache.join(transfer.to_string()).join(n)).collect();
+                    board.set_files(&paths);
+                    info!("{} copied item(s) from the peer ready to paste", paths.len());
+                    last_files = Some(paths);
+                    last_text = board.text();
+                    offered = None;
                 }
             }
+            std::thread::sleep(Duration::from_millis(300));
+            let share = self.config.lock().unwrap().share_clipboard;
+            let connected = self.state.lock().unwrap().connected;
+            let files = board.files();
+            if files != last_files {
+                last_files = files.clone();
+                last_text = board.text();
+                if let (true, true, Some(files), Some(link)) = (share, connected, files, self.link()) {
+                    self.share_copied_files(&link, files);
+                }
+                continue;
+            }
+            if last_files.is_some() {
+                continue; // files on the clipboard: their names as text aren't worth sending
+            }
+            let now = board.text();
+            if now == last_text {
+                continue;
+            }
+            last_text = now.clone();
+            if let (true, true, Some(text), Some(link)) = (share, connected, now, self.link())
+                && !text.is_empty()
+            {
+                link.send_clipboard(clipboard::encode_text(&text));
+            }
+        }
+    }
+
+    /// Files copied here: sent ahead into the peer's clipboard cache (up to a limit), then
+    /// announced, so pasting there finds them.
+    fn share_copied_files(&self, link: &Link, files: Vec<PathBuf>) {
+        let names: Vec<String> =
+            files.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+        let bytes: u64 = files.iter().map(|p| size_of(p)).sum();
+        let _rt = self.rt.enter();
+        if bytes > CLIPBOARD_FILE_LIMIT {
+            info!("copied files not shared: {bytes} bytes is over the limit");
+            link.send_clipboard(clipboard::encode_files_too_large(&names, bytes));
+            return;
+        }
+        if let Some(transfer) = link.send_files(files, true) {
+            info!("sharing {} copied item(s), {bytes} bytes", names.len());
+            link.send_clipboard(clipboard::encode_files(transfer, &names));
         }
     }
 
@@ -842,7 +918,7 @@ impl Delegate for App {
                 self.refresh();
             }
             "copy-id" => {
-                let _ = self.clipboard_in.send(self.node.id().to_string());
+                let _ = self.clipboard_in.send(ClipboardIn::Text(self.node.id().to_string()));
             }
             "pair-clipboard" => {
                 let text = kvm_platform::clipboard::Clipboard::new().ok().and_then(|mut c| c.text()).unwrap_or_default();
@@ -891,6 +967,26 @@ impl Delegate for App {
 
 fn spaced(code: &str) -> String {
     if code.len() == 6 { format!("{} {}", &code[..3], &code[3..]) } else { code.to_string() }
+}
+
+/// A file's size, or a folder's contents' (links not followed).
+fn size_of(path: &std::path::Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
+    if meta.is_dir() {
+        std::fs::read_dir(path).map(|dir| dir.flatten().map(|e| size_of(&e.path())).sum()).unwrap_or(0)
+    } else {
+        meta.len()
+    }
+}
+
+/// Drops cached files from earlier clipboard transfers.
+fn remove_cached_except(cache: &std::path::Path, keep: u64) {
+    let Ok(dir) = std::fs::read_dir(cache) else { return };
+    for entry in dir.flatten() {
+        if entry.file_name().to_string_lossy() != keep.to_string() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Shows a file in its folder.

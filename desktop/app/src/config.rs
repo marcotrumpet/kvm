@@ -108,6 +108,11 @@ pub fn downloads_dir() -> PathBuf {
     }
 }
 
+/// Where files copied on the peer wait to be pasted, a folder per transfer.
+pub fn clipboard_dir() -> PathBuf {
+    std::env::temp_dir().join("kvm-clipboard")
+}
+
 /// How this machine introduces itself to the peer.
 pub fn computer_name() -> String {
     let name = if cfg!(windows) {

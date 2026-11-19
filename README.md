@@ -103,7 +103,8 @@ locks the pointer to the app, otherwise the iPad pointer points at the picture).
 > reports and logs (tray menu > Show Log) are welcome.
 
 A tray app that pairs with a Mac as its other computer: share mouse and keyboard both ways
-(Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard (text). The Mac's Command
+(Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard: text, and files copied in
+Finder or Explorer (sent ahead up to 500 MB, then pasted like local ones). The Mac's Command
 keys act as Ctrl on Windows (and Ctrl as Command the other way), so shortcuts stay under
 the same fingers; the tray menu turns that off. The iPhone and iPad app can control it too
 (mouse, keyboard, typed text on Windows): Allow Pairing in the tray menu, then in the app tap
@@ -113,7 +114,7 @@ menu (or from the Mac's menu bar icon to this computer); they arrive in Download
 either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
 the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
 display; Stop Sharing This Screen in the tray). Not yet: sharing the Linux screen, viewing the
-Mac's screen from Windows, pasting files copied on the Mac, the microphone.
+Mac's screen from Windows, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.

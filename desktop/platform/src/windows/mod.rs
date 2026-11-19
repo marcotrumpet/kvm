@@ -62,6 +62,17 @@ pub mod clipboard {
                 tracing::warn!("setting the clipboard: {err}");
             }
         }
+
+        /// Files copied in the file manager, if that's what the clipboard holds.
+        pub fn files(&mut self) -> Option<Vec<std::path::PathBuf>> {
+            self.0.get().file_list().ok().filter(|f| !f.is_empty())
+        }
+
+        pub fn set_files(&mut self, paths: &[std::path::PathBuf]) {
+            if let Err(err) = self.0.set().file_list(paths) {
+                tracing::warn!("putting files on the clipboard: {err}");
+            }
+        }
     }
 }
 

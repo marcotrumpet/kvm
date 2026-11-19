@@ -55,7 +55,7 @@ fn run() -> Result<()> {
     }
 
     kvm_core::set_download_dir(config::downloads_dir());
-    kvm_core::set_clipboard_dir(std::env::temp_dir().join("kvm-clipboard"));
+    kvm_core::set_clipboard_dir(config::clipboard_dir());
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let config_dir = config::config_dir();
