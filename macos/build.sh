@@ -14,7 +14,8 @@ VERSION="${VERSION:-0.16.0}"
 FEED_URL="https://github.com/marcotrumpet/kvm/releases/latest/download/appcast.xml"
 SPARKLE_PUBLIC_KEY="uTJI1jCYearLasko0mLDJI9aF2fec64AWr13pneHktA="
 
-source "$HOME/.cargo/env" 2>/dev/null || true
+# Not there on CI runners; macOS's bash 3.2 exits on sourcing a missing file, even with || true.
+if [ -f "$HOME/.cargo/env" ]; then source "$HOME/.cargo/env"; fi
 
 # Signing, best available first:
 # - "Developer ID Application": hardened runtime + timestamp, then notarized (if the
