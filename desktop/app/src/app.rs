@@ -1,9 +1,10 @@
 //! The app: the link to the paired computer, switching control, replaying the peer's input,
-//! clipboard sharing, pairing and the tray menu. Mirrors the Mac app's Controller.
+//! clipboard sharing, pairing and the tray menu. Mirrors the Mac app's Controller, and its
+//! RemoteHost for iPhones and iPads, which control this computer on a link of their own.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent};
@@ -27,11 +28,15 @@ enum Mode {
 }
 
 pub struct App {
+    /// Itself, for callbacks that only get `&self` but start background work.
+    me: Weak<App>,
     rt: Handle,
     node: Node,
     config_dir: PathBuf,
     config: Mutex<Config>,
     link: Mutex<Option<Arc<Link>>>,
+    /// Sessions from paired remote controls, while there are any.
+    remotes: Mutex<Option<Arc<Link>>>,
     state: Mutex<State>,
     injector: Injector,
     /// Clipboard text received from the peer, to set on the clipboard thread.
@@ -50,13 +55,16 @@ struct State {
     pairing_until: Option<Instant>,
     /// Pairing requested by us and waiting for the other machine's answer.
     asking: Option<EndpointId>,
+    /// A remote control (named) is controlling this computer.
+    remote_controlling: Option<String>,
 }
 
 impl App {
     pub fn new(rt: Handle, node: Node, config_dir: PathBuf) -> Arc<App> {
         let config = Config::load(&config_dir);
         let (clipboard_in, clipboard_rx) = std::sync::mpsc::channel();
-        Arc::new(App {
+        Arc::new_cyclic(|me| App {
+            me: me.clone(),
             rt,
             node,
             config_dir,
@@ -69,9 +77,11 @@ impl App {
                 discovered: BTreeMap::new(),
                 pairing_until: None,
                 asking: None,
+                remote_controlling: None,
             }),
             config: Mutex::new(config),
             link: Mutex::new(None),
+            remotes: Mutex::new(None),
             injector: Injector::default(),
             clipboard_in,
             clipboard_rx: Mutex::new(Some(clipboard_rx)),
@@ -87,6 +97,7 @@ impl App {
         if let Some(peer) = self.peer_id() {
             self.connect(peer);
         }
+        self.listen_remotes();
         let app = self.clone();
         if let Some(mut events) = self.node.events() {
             self.rt.spawn(async move {
@@ -127,6 +138,80 @@ impl App {
             }
         });
         info!("linking with {peer}");
+    }
+
+    /// Accepts the paired remote controls (replacing the previous listener), or stops.
+    fn listen_remotes(self: &Arc<Self>) {
+        let allowed: std::collections::HashSet<EndpointId> =
+            self.config.lock().unwrap().remotes.keys().filter_map(|id| id.parse().ok()).collect();
+        if allowed.is_empty() {
+            *self.remotes.lock().unwrap() = None;
+            self.release_remote();
+            return;
+        }
+        let _rt = self.rt.enter();
+        let (link, mut events) = self.node.accept_remotes(allowed);
+        *self.remotes.lock().unwrap() = Some(Arc::new(link));
+        let app = self.clone();
+        self.rt.spawn(async move {
+            while let Some(event) = events.recv().await {
+                app.remote_event(event);
+            }
+        });
+    }
+
+    fn release_remote(&self) {
+        let was = self.state.lock().unwrap().remote_controlling.take();
+        if was.is_some() {
+            self.injector.end();
+            self.refresh();
+        }
+    }
+
+    /// A remote control's session: it only ever controls this computer.
+    fn remote_event(&self, event: Event) {
+        let controlling = || self.state.lock().unwrap().remote_controlling.is_some();
+        match event {
+            Event::Connected { peer, name } => {
+                info!("remote control {name} connected");
+                let mut config = self.config.lock().unwrap();
+                let id = peer.to_string();
+                if config.remotes.get(&id).is_some_and(|n| *n != name) && !name.is_empty() {
+                    config.remotes.insert(id, name);
+                    config.save(&self.config_dir);
+                }
+            }
+            Event::Entered => {
+                let name = self.remote_name();
+                info!("{name} took control");
+                self.return_to_local(true);
+                self.state.lock().unwrap().remote_controlling = Some(name);
+                self.injector.begin();
+                self.refresh();
+            }
+            Event::Left | Event::Stalled | Event::Disconnected { .. } | Event::TakenBack => self.release_remote(),
+            Event::Move { dx, dy } if controlling() => self.injector.motion(dx, dy),
+            Event::Scroll { dx, dy } if controlling() => self.injector.scroll(dx, dy),
+            Event::Wheel { dx, dy } if controlling() => self.injector.wheel(dx, dy),
+            Event::Key { code, down } if controlling() => self.injector.key(self.swapped(code), down),
+            Event::Button { button, down } if controlling() => self.injector.button(button, down),
+            Event::Consumer { usage, down } if controlling() => self.injector.consumer(usage, down),
+            Event::Text(text) if controlling() => self.injector.text(&text),
+            Event::PointerAbs { x, y, .. } if controlling() => self.injector.warp(x, y),
+            Event::Clipboard(payload) => {
+                if let Some(text) = clipboard::decode_text(&payload) {
+                    let _ = self.clipboard_in.send(text);
+                }
+            }
+            _ => {} // no screen to show yet
+        }
+    }
+
+    /// The connected remote control's name.
+    fn remote_name(&self) -> String {
+        let peer = self.remotes.lock().unwrap().as_ref().and_then(|l| l.session()).map(|s| s.peer().to_string());
+        let config = self.config.lock().unwrap();
+        peer.and_then(|id| config.remotes.get(&id).cloned()).unwrap_or_else(|| "A remote control".into())
     }
 
     fn link(&self) -> Option<Arc<Link>> {
@@ -306,9 +391,26 @@ impl App {
             }
             NodeEvent::PairRequest { id, name, code, remote } => {
                 if remote {
-                    // Phones and tablets control Macs only, for now.
-                    let _rt = self.rt.enter();
-                    self.node.respond_pairing(id, false);
+                    let app = self.clone();
+                    std::thread::spawn(move || {
+                        let text = format!(
+                            "{name} wants to control this computer as a remote (mouse, keyboard).\n\n\
+                             Check that it shows this code: {}\n\nAllow it?",
+                            spaced(&code)
+                        );
+                        let accepted = dialog::ask("KVM", &text);
+                        let _rt = app.rt.enter();
+                        if app.node.respond_pairing(id, accepted) && accepted {
+                            info!("remote control {name} paired");
+                            let mut config = app.config.lock().unwrap();
+                            config.remotes.insert(id.to_string(), name);
+                            config.save(&app.config_dir);
+                            drop(config);
+                            app.set_pairing_mode(false);
+                            app.listen_remotes();
+                            app.refresh();
+                        }
+                    });
                     return;
                 }
                 let app = self.clone();
@@ -430,6 +532,9 @@ impl App {
             return "KVM: not paired".into();
         }
         let s = self.state.lock().unwrap();
+        if let Some(remote) = &s.remote_controlling {
+            return format!("KVM: {remote} is controlling this computer");
+        }
         let peer = s.peer_name.clone().unwrap_or_else(|| "the other computer".into());
         match (s.connected, s.stalled, s.mode) {
             (false, _, _) => format!("KVM: connecting to {peer}…"),
@@ -500,6 +605,16 @@ impl App {
         if config.peer_id.is_some() {
             menu.push(MenuEntry::item("unpair", format!("Unpair {peer}")));
         }
+        let mut remotes: Vec<MenuEntry> = config
+            .remotes
+            .iter()
+            .map(|(id, name)| MenuEntry::item(&format!("remove-remote:{id}"), format!("Remove {name}")))
+            .collect();
+        if remotes.is_empty() {
+            remotes.push(MenuEntry::disabled("None: Allow Pairing here, then on the iPhone or iPad"));
+            remotes.push(MenuEntry::disabled("tap + > Enter Computer ID (Copy This Computer's ID)"));
+        }
+        menu.push(MenuEntry::Submenu { label: "iPhone and iPad".into(), children: remotes });
         drop(s);
         menu.push(MenuEntry::Separator);
         menu.push(MenuEntry::check("clipboard", "Share Clipboard", config.share_clipboard));
@@ -517,6 +632,7 @@ impl App {
     pub fn shutdown(&self) {
         self.return_to_local(true);
         self.release_control();
+        self.release_remote();
         updater::stop();
     }
 }
@@ -586,6 +702,17 @@ impl Delegate for App {
             }
             "log" => open(&crate::config::log_dir().join("kvm.log")),
             "quit" => ui::quit(),
+            _ if id.starts_with("remove-remote:") => {
+                let removed = id.trim_start_matches("remove-remote:");
+                let mut config = self.config.lock().unwrap();
+                config.remotes.remove(removed);
+                config.save(&self.config_dir);
+                drop(config);
+                if let Some(app) = self.me.upgrade() {
+                    app.listen_remotes(); // drops a session it had
+                }
+                self.refresh();
+            }
             _ => {
                 if let Some(peer) = id.strip_prefix("pair:").and_then(|s| s.parse::<EndpointId>().ok()) {
                     let _rt = self.rt.enter();

@@ -1,5 +1,6 @@
 //! Settings and where things live: %APPDATA%\KVM on Windows, $XDG_CONFIG_HOME/kvm elsewhere.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use kvm_platform::Hotkey;
@@ -11,6 +12,8 @@ pub struct Config {
     /// The paired computer.
     pub peer_id: Option<String>,
     pub peer_name: Option<String>,
+    /// Paired remote controls (iPhone, iPad): id -> name.
+    pub remotes: BTreeMap<String, String>,
     pub share_clipboard: bool,
     /// The Mac's Command keys act as Ctrl here and Ctrl as Command there, so shortcuts
     /// (copy, paste, ...) work under the same fingers on both.
@@ -23,6 +26,7 @@ impl Default for Config {
         Config {
             peer_id: None,
             peer_name: None,
+            remotes: BTreeMap::new(),
             share_clipboard: true,
             swap_ctrl_cmd: true,
             hotkey: HotkeyConfig::from(Hotkey::DEFAULT),

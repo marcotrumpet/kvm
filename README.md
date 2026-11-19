@@ -98,8 +98,11 @@ locks the pointer to the app, otherwise the iPad pointer points at the picture).
 A tray app that pairs with a Mac as its other computer: share mouse and keyboard both ways
 (Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard (text). The Mac's Command
 keys act as Ctrl on Windows (and Ctrl as Command the other way), so shortcuts stay under
-the same fingers; the tray menu turns that off. Not yet: viewing screens, files, the
-microphone.
+the same fingers; the tray menu turns that off. The iPhone and iPad app can control it too
+(mouse, keyboard, typed text on Windows): Allow Pairing in the tray menu, then in the app tap
++ > Enter Computer ID with the ID from Pair Over the Internet > Copy This Computer's ID;
+paired ones are listed (and removed) under iPhone and iPad. Not yet: viewing screens,
+files, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
