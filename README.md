@@ -115,7 +115,8 @@ the same fingers; the tray menu turns that off. The iPhone and iPad app can cont
 paired ones are listed (and removed) under iPhone and iPad. Files: Send Files in the tray
 menu (or from the Mac's menu bar icon to this computer); they arrive in Downloads. Locking
 either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
-the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
+the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264 on the
+GPU's encoder when there is one, else in software; `KVM_SOFTWARE_ENCODER=1` forces software; every
 display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
 … Screen in the tray; click the picture to control the Mac there, unless View Only is on). The
 Linux screen can be shared too (X11 capture, encoded with OpenH264), and Linux can show the

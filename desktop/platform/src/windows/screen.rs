@@ -1,9 +1,9 @@
 //! Shares this screen with a viewer: DXGI Desktop Duplication captures a display (the
 //! pointer, which it leaves out, is drawn in from its shape), the picture is scaled to NV12
-//! and encoded with Media Foundation's H.264 encoder (low latency, constant bitrate), and
-//! each frame is packaged for the viewers ([`crate::video`]). One thread per share.
+//! and encoded with Media Foundation's H.264 encoder ([`super::encoder`]: the GPU's, else
+//! software), and each frame is packaged for the viewers ([`crate::video`]). One thread per
+//! share.
 
-use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -19,22 +19,14 @@ use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_POINTER_SHAPE_INFO, IDXGIFactory1,
     IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
 };
-use windows::Win32::Media::MediaFoundation::{
-    CLSID_MSH264EncoderMFT, CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode,
-    CODECAPI_AVEncMPVGOPSize, CODECAPI_AVEncVideoForceKeyFrame, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFTransform,
-    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-    MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType,
-    MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFSTARTUP_LITE, MFSampleExtension_CleanPoint, MFStartup,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFVideoInterlace_Progressive, eAVEncCommonRateControlMode_CBR, eAVEncH264VProfile_Main,
-};
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
-use windows::Win32::System::Variant::VARIANT;
+use windows::Win32::Media::MediaFoundation::{MF_VERSION, MFSTARTUP_LITE, MFStartup};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::Interface;
 
+use super::encoder::Encoder;
 use crate::video::{Display, H264Packager, ScreenParams, bgra_to_nv12, fit};
 
-/// Media Foundation's software encoder tops out at H.264 level 5.1.
+/// Media Foundation's software encoder tops out at H.264 level 5.1 (hardware ones too, often).
 const MAX_WIDTH: u16 = 4096;
 const MAX_HEIGHT: u16 = 2304;
 
@@ -196,7 +188,19 @@ fn share(shared: &Shared, sink: &mut FrameSink) -> windows::core::Result<()> {
         if keyframe {
             shared.keyframe.store(false, Ordering::Release);
         }
-        for (annex_b, key) in encoder.encode(&nv12, keyframe)? {
+        let (frames, taken) = match encoder.encode(&nv12, keyframe) {
+            Ok(done) => done,
+            Err(err) if encoder.is_hardware() => {
+                tracing::warn!("hardware encoding failed ({err}): switching to software");
+                Encoder::hardware_failed();
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
+        if keyframe && !taken {
+            shared.keyframe.store(true, Ordering::Release); // the frame was skipped
+        }
+        for (annex_b, key) in frames {
             if let Some(payload) = packager.package(&annex_b, key)
                 && !sink(payload, key)
             {
@@ -416,125 +420,6 @@ fn draw_pointer(frame: &mut [u8], width: u32, height: u32, p: &Pointer) {
                 }
                 _ => {}
             }
-        }
-    }
-}
-
-/// Media Foundation's H.264 encoder, fed NV12 frames, giving Annex B access units.
-struct Encoder {
-    mft: IMFTransform,
-    codec: Option<ICodecAPI>,
-    frame_len: usize,
-    duration: i64,
-    time: i64,
-}
-
-fn pack(hi: u32, lo: u32) -> u64 {
-    (hi as u64) << 32 | lo as u64
-}
-
-impl Encoder {
-    fn new(width: u32, height: u32, fps: u32, kbps: u32) -> windows::core::Result<Encoder> {
-        unsafe {
-            let mft: IMFTransform = CoCreateInstance(&CLSID_MSH264EncoderMFT, None, CLSCTX_INPROC_SERVER)?;
-            let output = MFCreateMediaType()?;
-            output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-            output.SetUINT32(&MF_MT_AVG_BITRATE, kbps * 1000)?;
-            output.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
-            output.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
-            output.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
-            output.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            output.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main.0 as u32)?;
-            mft.SetOutputType(0, &output, 0)?;
-
-            let input = MFCreateMediaType()?;
-            input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-            input.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
-            input.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
-            input.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
-            input.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-            mft.SetInputType(0, &input, 0)?;
-
-            let codec = mft.cast::<ICodecAPI>().ok();
-            if let Some(codec) = &codec {
-                // No frame reordering or lookahead: each frame comes out as soon as it goes in.
-                let _ = codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
-                let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32));
-                let _ = codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(kbps * 1000));
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 10));
-            }
-            mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-            mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok(Encoder {
-                mft,
-                codec,
-                frame_len: (width * height * 3 / 2) as usize,
-                duration: 10_000_000 / fps as i64,
-                time: 0,
-            })
-        }
-    }
-
-    fn set_bitrate(&self, kbps: u32) {
-        if let Some(codec) = &self.codec {
-            let _ = unsafe { codec.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(kbps * 1000)) };
-        }
-    }
-
-    /// Encodes one frame; returns what the encoder has ready (Annex B, keyframe).
-    fn encode(&mut self, nv12: &[u8], keyframe: bool) -> windows::core::Result<Vec<(Vec<u8>, bool)>> {
-        unsafe {
-            if keyframe && let Some(codec) = &self.codec {
-                let _ = codec.SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &VARIANT::from(1u32));
-            }
-            let buffer = MFCreateMemoryBuffer(nv12.len() as u32)?;
-            let mut data = std::ptr::null_mut();
-            buffer.Lock(&mut data, None, None)?;
-            std::ptr::copy_nonoverlapping(nv12.as_ptr(), data, nv12.len());
-            buffer.Unlock()?;
-            buffer.SetCurrentLength(nv12.len() as u32)?;
-            let sample = MFCreateSample()?;
-            sample.AddBuffer(&buffer)?;
-            sample.SetSampleTime(self.time)?;
-            sample.SetSampleDuration(self.duration)?;
-            self.time += self.duration;
-            self.mft.ProcessInput(0, &sample, 0)?;
-
-            let mut out = Vec::new();
-            loop {
-                let info = self.mft.GetOutputStreamInfo(0)?;
-                let capacity = (info.cbSize as usize).max(self.frame_len);
-                let out_buffer = MFCreateMemoryBuffer(capacity as u32)?;
-                let out_sample = MFCreateSample()?;
-                out_sample.AddBuffer(&out_buffer)?;
-                let mut buffers = [MFT_OUTPUT_DATA_BUFFER {
-                    dwStreamID: 0,
-                    pSample: ManuallyDrop::new(Some(out_sample.clone())),
-                    dwStatus: 0,
-                    pEvents: ManuallyDrop::new(None),
-                }];
-                let mut status = 0;
-                let result = self.mft.ProcessOutput(0, &mut buffers, &mut status);
-                ManuallyDrop::drop(&mut buffers[0].pSample);
-                ManuallyDrop::drop(&mut buffers[0].pEvents);
-                match result {
-                    Ok(()) => {
-                        let contiguous = out_sample.ConvertToContiguousBuffer()?;
-                        let mut ptr = std::ptr::null_mut();
-                        let mut len = 0u32;
-                        contiguous.Lock(&mut ptr, None, Some(&mut len))?;
-                        let bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
-                        contiguous.Unlock()?;
-                        let key = out_sample.GetUINT32(&MFSampleExtension_CleanPoint).unwrap_or(0) != 0;
-                        out.push((bytes, key));
-                    }
-                    Err(err) if err.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
-                    Err(err) => return Err(err),
-                }
-            }
-            Ok(out)
         }
     }
 }
