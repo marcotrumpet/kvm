@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub const ALPN: &[u8] = b"kvm/1";
-pub const PROTOCOL_VERSION: u16 = 13;
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// Upper bound for a single control frame. Bulk data (clipboard) uses its own streams.
 const MAX_FRAME_LEN: usize = 64 * 1024;
@@ -32,6 +32,9 @@ pub struct Motion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Datagram {
     Motion(Motion),
+    /// One encoded audio packet of the host's sound, while viewed with
+    /// `VideoParams::audio` (format up to the apps, see docs). Lost packets are skipped.
+    Audio(Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +82,13 @@ pub enum Control {
     /// degrees counterclockwise x 100); `phase` is `PHASE_BEGAN`, `PHASE_CHANGED` or
     /// `PHASE_ENDED`. Values are increments, like macOS's own gesture events.
     Gesture { kind: u8, phase: u8, value: i32 },
+    /// The sender's screen locked: lock this machine too (if its user wants that).
+    Lock,
+    /// The sender's Wake-on-LAN address (its Ethernet/Wi-Fi MAC, 6 bytes), to wake it later.
+    WakeAddress(Vec<u8>),
+    /// From the controlled side: its user took the machine back. Stop controlling and
+    /// viewing it.
+    TakeBack,
 }
 
 pub const GESTURE_MAGNIFY: u8 = 0;

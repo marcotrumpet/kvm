@@ -40,8 +40,11 @@ final class RemoteViewController: UIViewController {
     private var requestedSize: CGSize?
 
     private var screenOn = Prefs.screenOn
-    /// The computer lays out its main display at this screen's size and shape.
-    private var fitHost = Prefs.fitHost
+    /// How the computer's display follows this screen: not at all, its main display taking
+    /// this screen's shape, or an extra display for this screen.
+    private var fitHost = Prefs.hostFit
+    private let fitButton = UIButton(type: .system)
+    private var sound = Prefs.sound
     private var mode = Prefs.touchMode
     private var barCollapsed = false
     /// Tips waiting to be shown, one after another, and the one on screen.
@@ -228,10 +231,14 @@ final class RemoteViewController: UIViewController {
         requestedSize = pixelSize
         // Zoomed in, more pixels than the screen has keep the picture sharp (the computer
         // sends at most its display's own resolution). A fitted computer takes only this
-        // screen's shape, so zooming still finds more pixels there.
-        let size = CGSize(width: pixelSize.width * streamZoom, height: pixelSize.height * streamZoom)
+        // screen's shape, so zooming still finds more pixels there; an extra display is
+        // exactly this screen's size, so zooming doesn't resize it.
+        let zoom = fitHost == .extend ? 1 : streamZoom
+        let size = CGSize(width: pixelSize.width * zoom, height: pixelSize.height * zoom)
         var params = VideoQuality.auto.params(maxSize: size)
-        params.fitHost = fitHost ? .shape : .off
+        params.fitHost = fitHost
+        params.hevc = VideoFrames.decodesHEVC
+        params.audio = sound
         model.view(params) { [weak self] data in
             DispatchQueue.main.async { self?.enqueue(data) }
         }
@@ -266,6 +273,7 @@ final class RemoteViewController: UIViewController {
 
     /// After a pinch: ask for a stream to match the zoom, when it changed enough to matter.
     private func updateStreamZoom() {
+        guard fitHost != .extend else { return }
         guard abs(zoom / streamZoom - 1) > 0.15 || (zoom == 1 && streamZoom != 1) else { return }
         streamZoom = zoom
         if screenOn, requestedSize != nil { startVideo() }
@@ -341,17 +349,22 @@ final class RemoteViewController: UIViewController {
             updateDisplayMenu()
             updateStatus()
         }, for: .primaryActionTriggered)
-        let fit = button(fitHost ? "aspectratio.fill" : "aspectratio", "Fit computer to this screen") {}
-        fit.addAction(UIAction { [weak self, weak fit] _ in
+        var fitConfig = UIButton.Configuration.plain()
+        fitConfig.baseForegroundColor = .white
+        fitConfig.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)
+        fitButton.configuration = fitConfig
+        fitButton.showsMenuAsPrimaryAction = true
+        fitButton.accessibilityLabel = "Computer's screen"
+        updateFitMenu()
+        let soundButton = button(sound ? "speaker.wave.2" : "speaker.slash", "Sound") {}
+        soundButton.addAction(UIAction { [weak self, weak soundButton] _ in
             guard let self else { return }
-            fitHost.toggle()
-            Prefs.fitHost = fitHost
-            fit?.configuration?.image = UIImage(systemName: fitHost ? "aspectratio.fill" : "aspectratio")
-            showHint(fitHost ? "The computer's resolution follows this screen" : "The computer keeps its own resolution")
-            if screenOn {
-                resetZoom()
-                startVideo()
-            }
+            sound.toggle()
+            Prefs.sound = sound
+            soundButton?.configuration?.image = UIImage(systemName: sound ? "speaker.wave.2" : "speaker.slash")
+            showHint(sound ? "Playing the computer's sound" : "Sound off")
+            if !sound { model.stopAudio() }
+            if screenOn { startVideo() }
         }, for: .primaryActionTriggered)
         let clipboard = button("doc.on.clipboard", "Send clipboard") { [weak self] in
             self?.model.sendClipboard()
@@ -404,7 +417,7 @@ final class RemoteViewController: UIViewController {
             macButtons = [menu]
         }
 
-        barButtons = [close, keys, modeButton, screen, fit, displayButton, clipboard] + macButtons + [info]
+        barButtons = [close, keys, modeButton, screen, fitButton, soundButton, displayButton, clipboard] + macButtons + [info]
         bar.addArrangedSubviews(barButtons + [collapse])
         bar.axis = .horizontal
         bar.alignment = .center
@@ -426,6 +439,32 @@ final class RemoteViewController: UIViewController {
             barBackground.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -8),
             barBackground.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
         ])
+    }
+
+    private func updateFitMenu() {
+        let choices: [(HostFit, String, String)] = [
+            (.off, "Keep its resolution", "aspectratio"),
+            (.shape, "Fit it to this screen", "aspectratio.fill"),
+            (.extend, "Use this as an extra screen", "rectangle.on.rectangle.angled"),
+        ]
+        fitButton.configuration?.image = UIImage(systemName: choices.first { $0.0 == fitHost }?.2 ?? "aspectratio")
+        fitButton.menu = UIMenu(title: "Computer's screen", children: choices.map { choice in
+            UIAction(title: choice.1, image: UIImage(systemName: choice.2), state: choice.0 == fitHost ? .on : .off) { [weak self] _ in
+                guard let self, fitHost != choice.0 else { return }
+                fitHost = choice.0
+                Prefs.hostFit = fitHost
+                updateFitMenu()
+                switch fitHost {
+                case .off: showHint("The computer keeps its own resolution")
+                case .extend: showHint("A new screen for the computer: drag windows onto it")
+                default: showHint("The computer's screen takes this screen's shape")
+                }
+                if screenOn {
+                    resetZoom()
+                    startVideo()
+                }
+            }
+        })
     }
 
     private func updateDisplayMenu() {
@@ -1054,7 +1093,7 @@ enum Tip: String, CaseIterable {
         case .keyboard:
             "The bar above the keys has esc, tab and arrows. For a shortcut like ⌘C, tap ⌘, then C."
         case .bar:
-            "The buttons up here switch between trackpad and touch, show the screen, fit the computer's resolution to this screen and send your clipboard. You can find these tips again under Tips."
+            "The buttons up here switch between trackpad and touch, show the screen, fit the computer's screen to this one (or add this as an extra screen), turn its sound on or off and send your clipboard. You can find these tips again under Tips."
         }
     }
 }
@@ -1073,9 +1112,18 @@ enum Prefs {
         set { defaults.set(newValue, forKey: "screenOn") }
     }
 
-    static var fitHost: Bool {
-        get { defaults.bool(forKey: "fitHost") }
-        set { defaults.set(newValue, forKey: "fitHost") }
+    static var hostFit: HostFit {
+        get {
+            if let raw = defaults.object(forKey: "hostFit") as? Int { return HostFit(rawValue: UInt8(raw)) ?? .off }
+            return defaults.bool(forKey: "fitHost") ? .shape : .off // the earlier on/off setting
+        }
+        set { defaults.set(Int(newValue.rawValue), forKey: "hostFit") }
+    }
+
+    /// Play the computer's sound while showing its screen.
+    static var sound: Bool {
+        get { defaults.object(forKey: "sound") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "sound") }
     }
 
     static var touchMode: RemoteViewController.TouchMode {

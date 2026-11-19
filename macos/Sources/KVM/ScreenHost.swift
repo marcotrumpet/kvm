@@ -3,11 +3,12 @@ import os
 import ScreenCaptureKit
 import VideoToolbox
 
-/// Shares this Mac's main display with the peer: ScreenCaptureKit capture, hardware H.264
-/// encoding in low-latency mode, frames handed to the core.
+/// Shares this Mac's main display with the peer: ScreenCaptureKit capture, hardware H.264 or
+/// HEVC encoding in low-latency mode, frames handed to the core.
 ///
-/// Frame payload: `nalLengthSize: u8 | parameterSetCount: u8 | (len: u16 BE, bytes)* | AVCC`.
-/// Keyframes carry the SPS/PPS, so the viewer can (re)start decoding at any keyframe.
+/// Frame payload: `hevc << 7 | nalLengthSize: u8 | parameterSetCount: u8 | (len: u16 BE,
+/// bytes)* | AVCC`. Keyframes carry the parameter sets (HEVC: VPS, SPS, PPS; H.264: SPS,
+/// PPS), so the viewer can (re)start decoding at any keyframe.
 /// State is confined to `queue` or the main thread, as marked; hence `@unchecked Sendable`.
 final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let core: Core
@@ -35,6 +36,13 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     private var level = 0
     private var targetKbps = 12_000
     private var encoderSize = CGSize.zero
+    /// The viewer decodes HEVC: encode with it when this Mac can.
+    private var wantsHEVC = false
+    /// The viewer wants this Mac's sound too.
+    private var wantsAudio = false
+    /// Sound is encoded on its own queue, so it never waits behind a video frame.
+    private let audioQueue = DispatchQueue(label: "kvm.screen-audio", qos: .userInteractive)
+    private let audioEncoder = AudioEncoder()
     private var fps: Int { ladder.isEmpty ? 60 : ladder[level].fps }
     /// Bits per pixel per frame below which a rung looks bad (step down), and the headroom
     /// needed to step back up. Low, because a desktop is mostly static and H.264 spends
@@ -46,6 +54,8 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
 
     init(core: Core) {
         self.core = core
+        super.init()
+        audioEncoder.onPayload = { [core] in core.sendAudio($0) }
     }
 
     var isSharing: Bool { stream != nil }
@@ -93,6 +103,7 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         capturedDisplay = 0
         VirtualDisplay.shared.remove(owner: self)
         stream?.stopCapture { _ in }
+        audioQueue.async { [self] in audioEncoder.reset() }
         queue.async { [self] in
             if let encoder { VTCompressionSessionInvalidate(encoder) }
             encoder = nil
@@ -152,9 +163,13 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     /// captured stops the capture).
     private func target(for params: VideoParams) -> CGDirectDisplayID {
         let virtual = VirtualDisplay.shared
-        if params.fitHost != .off, params.display == 0,
-           let id = virtual.fit(to: CGSize(width: params.maxWidth, height: params.maxHeight),
-                                shapeOnly: params.fitHost == .shape, owner: self) {
+        let size = CGSize(width: params.maxWidth, height: params.maxHeight)
+        if params.fitHost == .extend, let id = virtual.fit(to: size, shapeOnly: false, mirror: false, owner: self) {
+            // The extra screen stays while the viewer looks at the others too.
+            return params.display == 0 ? id : Displays.resolve(params.display)
+        }
+        if params.fitHost != .off, params.fitHost != .extend, params.display == 0,
+           let id = virtual.fit(to: size, shapeOnly: params.fitHost == .shape, owner: self) {
             return id
         }
         guard stream != nil, capturedDisplay == virtual.id, let physical = virtual.release(owner: self) else {
@@ -194,6 +209,8 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let native = ScreenHost.nativeSize(of: display)
         let full = ScreenHost.fit(native, params)
         let start = queue.sync { () -> Level in
+            wantsHEVC = params.hevc
+            wantsAudio = params.audio
             nativeSize = native
             fullSize = full
             ladder = ScreenHost.ladder(maxFps: max(params.fps, 1), prefer: params.prefer)
@@ -202,7 +219,7 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         }
         let width = Int(full.width * start.scale) & ~1
         let height = Int(full.height * start.scale) & ~1
-        let config = ScreenHost.configuration(width: width, height: height, fps: start.fps)
+        let config = ScreenHost.configuration(width: width, height: height, fps: start.fps, audio: params.audio)
 
         let encoder = try queue.sync { try makeEncoder(width: width, height: height) }
         queue.sync {
@@ -214,9 +231,11 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                               configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
         try await stream.startCapture()
         self.stream = stream
-        Log.info("screen sharing started: \(width)x\(height) @ \(start.fps) fps, \(targetKbps) kbit/s (up to \(params.bitrateKbps))")
+        Log.info("screen sharing started: \(width)x\(height) @ \(start.fps) fps, \(targetKbps) kbit/s (up to \(params.bitrateKbps))"
+                 + "\(params.hevc ? ", HEVC if available" : "")\(params.audio ? ", with sound" : "")")
     }
 
     /// Any thread: the core adapted the bitrate to the link.
@@ -255,6 +274,11 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     /// On `queue`: new viewer settings while streaming.
     private func reconfigure(_ params: VideoParams) {
         guard nativeSize != .zero else { return }
+        if params.hevc != wantsHEVC {
+            wantsHEVC = params.hevc
+            encoderSize = .zero // a new encoder for the other codec
+        }
+        wantsAudio = params.audio // applied with the capture settings below
         fullSize = ScreenHost.fit(nativeSize, params)
         ladder = ScreenHost.ladder(maxFps: max(params.fps, 1), prefer: params.prefer)
         let next = ScreenHost.pick(kbps: targetKbps, full: fullSize, ladder: ladder, current: 0)
@@ -273,8 +297,12 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         return current
     }
 
-    private static func configuration(width: Int, height: Int, fps: Int) -> SCStreamConfiguration {
+    private static func configuration(width: Int, height: Int, fps: Int, audio: Bool) -> SCStreamConfiguration {
         let config = SCStreamConfiguration()
+        config.capturesAudio = audio
+        config.sampleRate = Int(AudioStream.sampleRate)
+        config.channelCount = Int(AudioStream.channels)
+        config.excludesCurrentProcessAudio = true
         config.width = width
         config.height = height
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
@@ -303,7 +331,7 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
             VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: rung.fps as CFNumber)
         }
         Log.info("screen sharing quality -> \(width)x\(height) @ \(rung.fps) fps for \(targetKbps) kbit/s")
-        let config = ScreenHost.configuration(width: width, height: height, fps: rung.fps)
+        let config = ScreenHost.configuration(width: width, height: height, fps: rung.fps, audio: wantsAudio)
         DispatchQueue.main.async { [self] in
             stream?.updateConfiguration(config) { error in
                 if let error { Log.warn("changing capture settings: \(error)") }
@@ -320,17 +348,34 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     }
 
     /// On `queue`.
+    /// HEVC when the viewer asked for it and this Mac encodes it in low-latency mode,
+    /// otherwise H.264.
     private func makeEncoder(width: Int, height: Int) throws -> VTCompressionSession {
+        if wantsHEVC, let session = ScreenHost.makeSession(kCMVideoCodecType_HEVC, width: width, height: height) {
+            return configure(session)
+        }
+        guard let session = ScreenHost.makeSession(kCMVideoCodecType_H264, width: width, height: height) else {
+            throw CoreError(description: "creating the H.264 encoder failed")
+        }
+        return configure(session)
+    }
+
+    private static func makeSession(_ codec: CMVideoCodecType, width: Int, height: Int) -> VTCompressionSession? {
         let spec = [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: kCFBooleanTrue] as CFDictionary
         var session: VTCompressionSession?
         let status = VTCompressionSessionCreate(
             allocator: nil, width: Int32(width), height: Int32(height),
-            codecType: kCMVideoCodecType_H264, encoderSpecification: spec,
+            codecType: codec, encoderSpecification: spec,
             imageBufferAttributes: nil, compressedDataAllocator: nil,
             outputCallback: nil, refcon: nil, compressionSessionOut: &session)
         guard status == noErr, let session else {
-            throw CoreError(description: "creating the H.264 encoder failed (\(status))")
+            Log.warn("creating the \(codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264") encoder failed (\(status))")
+            return nil
         }
+        return session
+    }
+
+    private func configure(_ session: VTCompressionSession) -> VTCompressionSession {
         let props: [CFString: Any] = [
             kVTCompressionPropertyKey_RealTime: true,
             kVTCompressionPropertyKey_AllowFrameReordering: false,
@@ -349,6 +394,10 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
     // MARK: Capture (on `queue`)
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        if type == .audio { // on `audioQueue`
+            if sampleBuffer.isValid { audioEncoder.encode(sampleBuffer) }
+            return
+        }
         guard type == .screen, sampleBuffer.isValid, let frame = sampleBuffer.imageBuffer else { return }
         // Skip "idle"/"blank" status updates that carry no new content.
         if let info = (CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]])?.first,
@@ -394,22 +443,21 @@ final class ScreenHost: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked S
         var payload = Data()
         var nalLength: Int32 = 4
         var parameterSets: [Data] = []
+        let hevc = CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_HEVC
+        let parameterSet = hevc ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex
+                                : CMVideoFormatDescriptionGetH264ParameterSetAtIndex
         if keyframe {
             var count = 0
-            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                format, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil,
-                parameterSetCountOut: &count, nalUnitHeaderLengthOut: &nalLength)
+            parameterSet(format, 0, nil, nil, &count, &nalLength)
             for i in 0..<count {
                 var pointer: UnsafePointer<UInt8>?
                 var size = 0
-                if CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                    format, parameterSetIndex: i, parameterSetPointerOut: &pointer, parameterSetSizeOut: &size,
-                    parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let pointer {
+                if parameterSet(format, i, &pointer, &size, nil, nil) == noErr, let pointer {
                     parameterSets.append(Data(bytes: pointer, count: size))
                 }
             }
         }
-        payload.append(UInt8(nalLength))
+        payload.append(UInt8(nalLength) | (hevc ? 0x80 : 0))
         payload.append(UInt8(parameterSets.count))
         for set in parameterSets {
             payload.append(UInt8(set.count >> 8))

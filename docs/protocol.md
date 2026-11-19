@@ -11,7 +11,7 @@ of paired remote controls, one session at a time. They only ever send input.
 
 | Channel | Reliability | Carries |
 |---|---|---|
-| QUIC datagrams | unreliable | `Datagram::Motion` |
+| QUIC datagrams | unreliable | `Datagram::Motion`, `Datagram::Audio` |
 | first bi-directional stream | reliable, ordered | `Control` frames: u32 LE length + postcard body, max 64 KiB |
 
 ## Motion
@@ -34,6 +34,11 @@ on-screen keyboard has no key positions to send; line breaks and tabs are typed 
 counterclockwise x 100; phases 1 began, 2 changed, 4 ended; replayed as real trackpad
 gesture events).
 
+`Lock` (the sender's screen locked; the receiver locks too if its user wants that) ·
+`WakeAddress(mac)` (6 bytes, for Wake-on-LAN later) · `TakeBack` (from the controlled
+side: its user took the machine back; the receiver stops controlling and viewing it, and
+the sender has already released its input and stopped sharing).
+
 The receiver only injects input between `Enter` and `Leave`, tracks what it holds down, and
 drops key-ups for keys it never pressed. `Leave` releases everything still held.
 
@@ -55,6 +60,11 @@ stream 10, clipboard -5, video -10, files -20, so input always goes first.
 `seq: u64 LE | flags: u8 (1 = keyframe) | payload`. At most 3 frames in flight; beyond that
 the host refuses frames and encodes the next as a keyframe. The viewer delivers frames in
 order and, after a loss (a gap for 40 ms), waits for the next keyframe and requests one.
+
+Payload (the apps' format): `codec << 7 | nalLengthSize: u8 | parameterSetCount: u8 |
+(len: u16 BE, bytes)* | AVCC`. Codec 0 is H.264 (SPS, PPS), 1 HEVC (VPS, SPS, PPS); the
+host uses HEVC only when `VideoParams.codecs` bit 0 says the viewer decodes it. Keyframes
+carry the parameter sets.
 
 The host adapts the bitrate every 500 ms (AIMD): congestion (a refused frame, or mean frame
 delivery time 25 ms above the best seen) cuts it to 70%, then it holds for 2 s; otherwise it
@@ -82,6 +92,15 @@ clipboard payload announces them with an `application/x-kvm-files` entry: JSON
 `{"transfer": "<id>", "names": ["top-level item", ...]}`. Copies above the sender's limit
 are announced as `application/x-kvm-files-too-large`: `{"names": [...], "bytes": n}`.
 
+### Audio
+
+With `VideoParams.audio`, the host also sends its sound (not the app's own), one AAC-ELD
+packet (48 kHz stereo, 128 kbit/s, 512 frames) per `Datagram::Audio`: `kind: u8 | bytes`,
+kind 0 the encoder's magic cookie (before the first packet and every 200 packets, so the
+viewer can start or recover any time), kind 1 a packet. Lost packets are skipped, and the
+viewer drops packets while more than 150 ms are queued, so delay can't build up. Without
+datagrams there is no sound.
+
 ### Displays
 
 While being viewed, the host sends `Control::DisplayList` (and again when its displays
@@ -96,6 +115,11 @@ picture keeps the viewer's aspect ratio. 1 sizes it to `max_width` x
 count, so `max_*` stays a cap the viewer can raise when zooming in. The virtual display is
 the main one while it exists; it goes away with `VideoStop`, a request with `fit_host` 0,
 or the connection.
+
+`fit_host` 3 instead adds the virtual display as an extra screen at `max_width` x
+`max_height`, to the right of the host's own, like Sidecar. While it exists it is display 0
+(and the `main` one in the display list) for the viewer; the host's real main display is
+still there by its id.
 
 ### Viewer control
 

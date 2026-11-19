@@ -29,6 +29,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     private(set) var selectedDisplay: UInt32 = 0
     private let matchWindow = NSButton(checkboxWithTitle: "Match window size", target: nil, action: nil)
     private let resizeHost = NSButton(checkboxWithTitle: "Resize host", target: nil, action: nil)
+    private let sound = NSButton(checkboxWithTitle: "Sound", target: nil, action: nil)
     private let hoverControl = NSButton(checkboxWithTitle: "Control on hover", target: nil, action: nil)
     private lazy var fullScreen = NSButton(
         image: NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Full Screen")!,
@@ -139,6 +140,12 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         resizeHost.controlSize = .small
         resizeHost.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         resizeHost.toolTip = "Change the other computer's resolution and shape to fit this window, while viewing it"
+        sound.state = Settings.viewerAudio ? .on : .off
+        sound.target = self
+        sound.action = #selector(soundChanged)
+        sound.controlSize = .small
+        sound.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        sound.toolTip = "Play the other computer's sound here"
         hoverControl.toolTip = "Take control as soon as the pointer enters the picture. Off: click into it"
         hoverControl.state = Settings.viewerHoverControl ? .on : .off
         hoverControl.target = self
@@ -161,7 +168,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         fullScreen.bezelStyle = .accessoryBarAction
         fullScreen.isBordered = false
         fullScreen.toolTip = "Full screen, one-to-one"
-        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, hoverControl, spacer, stats, fullScreen])
+        let bar = NSStackView(views: [displayMenu, label, qualityMenu, matchWindow, resizeHost, sound, hoverControl, spacer, stats, fullScreen])
         bar.orientation = .horizontal
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
@@ -300,6 +307,11 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
 
     @objc private func matchWindowChanged() {
         Settings.viewerMatchesWindow = matchWindow.state == .on
+        onStreamSettingsChanged?()
+    }
+
+    @objc private func soundChanged() {
+        Settings.viewerAudio = sound.state == .on
         onStreamSettingsChanged?()
     }
 

@@ -11,7 +11,13 @@ Windows and Linux are planned.
   notches; nothing stays stuck if the connection drops (heartbeat failsafe).
 - **Clipboard**: text, rich text, images, and files copied in Finder (pasted on demand).
 - **File sharing**: drop on the menu bar icon or the viewer; permissions, links and app bundles survive.
-- **Screen viewer**: hardware H.264, adaptive bitrate and quality, multiple displays, full-screen 1:1.
+- **Screen viewer**: hardware HEVC or H.264, adaptive bitrate and quality, the host's sound,
+  multiple displays, full-screen 1:1. The host can re-lay out its desktop to the viewer's
+  size or shape, or add the viewer as an extra screen (iPad, like Sidecar).
+- **Lock and wake**: locking either Mac locks both; switching to a sleeping Mac wakes it
+  (Wake-on-LAN, same network).
+- **In use from elsewhere**: a panel on the Mac while it is controlled or viewed, with a
+  Take Back button.
 - **Wi-Fi**: optionally pauses AWDL (AirDrop's radio hopping) while connected, which removes
   80–100 ms lag spikes.
 

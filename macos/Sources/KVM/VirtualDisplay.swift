@@ -1,10 +1,11 @@
 import AppKit
 import CGVirtualDisplay
 
-/// A virtual display at the viewer's size or shape that the main display mirrors, so the
-/// whole desktop is laid out at the viewer's resolution or aspect ratio while it is viewed.
-/// The physical screen shows a letterboxed copy. One per app, shared by the screen hosts:
-/// the last to ask wins. Main thread only.
+/// A virtual display at the viewer's size or shape. Mirrored by the main display, the whole
+/// desktop is laid out at the viewer's resolution or aspect ratio while it is viewed (the
+/// physical screen shows a letterboxed copy); not mirrored, it is an extra screen to the
+/// right of the others, like Sidecar. One per app, shared by the screen hosts: the last to
+/// ask wins. Main thread only.
 final class VirtualDisplay {
     static let shared = VirtualDisplay()
 
@@ -12,6 +13,8 @@ final class VirtualDisplay {
     /// The physical main display, and whether it mirrors ours yet.
     private var physical: CGDirectDisplayID = 0
     private var mirrored = false
+    /// As an extra screen: whether it was put to the right of the others yet.
+    private var placed = false
     /// Unmirrored and waiting to be removed once capture has moved off it.
     private(set) var released = false
     private var size = CGSize.zero
@@ -24,7 +27,8 @@ final class VirtualDisplay {
     /// Creates or resizes the display for `owner` to about `pixels` (`shapeOnly`: to their
     /// aspect ratio at the physical display's pixel count) and returns its id, or nil if it
     /// could not be created.
-    func fit(to pixels: CGSize, shapeOnly: Bool, owner: AnyObject) -> CGDirectDisplayID? {
+    /// `mirror`: the main display mirrors it; otherwise it is an extra screen.
+    func fit(to pixels: CGSize, shapeOnly: Bool, mirror: Bool = true, owner: AnyObject) -> CGDirectDisplayID? {
         self.owner = owner
         released = false
         let wanted = shapeOnly ? shape(pixels.width / max(pixels.height, 1)) : VirtualDisplay.round(pixels)
@@ -47,7 +51,13 @@ final class VirtualDisplay {
             size = wanted
             Log.info("virtual display -> \(Int(wanted.width))x\(Int(wanted.height))")
         }
-        if !mirrored { mirror(onto: display.displayID) }
+        if mirror {
+            if !mirrored { self.mirror(onto: display.displayID) }
+        } else {
+            unmirror()
+            if !placed { place(display.displayID) }
+        }
+        Displays.extended.withLock { $0 = mirror ? 0 : display.displayID }
         return display.displayID
     }
 
@@ -70,6 +80,7 @@ final class VirtualDisplay {
     func release(owner: AnyObject) -> CGDirectDisplayID? {
         guard display != nil, self.owner === owner || self.owner == nil else { return nil }
         unmirror()
+        Displays.extended.withLock { $0 = 0 }
         released = true
         return physical
     }
@@ -78,7 +89,9 @@ final class VirtualDisplay {
     func remove(owner: AnyObject) {
         guard display != nil, self.owner === owner || self.owner == nil else { return }
         unmirror()
+        Displays.extended.withLock { $0 = 0 }
         released = false
+        placed = false
         display = nil // releasing it unplugs it
         size = .zero
         self.owner = nil
@@ -93,6 +106,23 @@ final class VirtualDisplay {
             CGCompleteDisplayConfiguration(config, .forAppOnly)
         }
         mirrored = false
+    }
+
+    /// Puts the extra screen to the right of the others, top-aligned with the main one.
+    /// Retried on the next `fit` if the new display is not online yet.
+    private func place(_ id: CGDirectDisplayID) {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        guard ids.contains(id) else { return }
+        let right = ids.filter { $0 != id }.map { CGDisplayBounds($0).maxX }.max() ?? 0
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        CGConfigureDisplayOrigin(config, id, Int32(right), Int32(CGDisplayBounds(physical).minY))
+        guard CGCompleteDisplayConfiguration(config, .forAppOnly) == .success else { return }
+        placed = true
+        Log.info("virtual display \(id) is an extra screen")
     }
 
     /// Makes the physical main display mirror ours. `.forAppOnly`: undone if the app quits

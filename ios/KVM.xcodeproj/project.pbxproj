@@ -9,11 +9,13 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000101 /* Core.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000201 /* Core.swift */; };
 		A10000000000000000000102 /* VideoFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000202 /* VideoFrames.swift */; };
+		A10000000000000000000110 /* AudioStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000210 /* AudioStream.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000201 /* Core.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Core.swift; sourceTree = "<group>"; };
 		A10000000000000000000202 /* VideoFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFrames.swift; sourceTree = "<group>"; };
+		A10000000000000000000210 /* AudioStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStream.swift; sourceTree = "<group>"; };
 		A10000000000000000000203 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000204 /* build-rust.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "build-rust.sh"; sourceTree = "<group>"; };
 		A10000000000000000000299 /* KVM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KVM.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -50,6 +52,7 @@
 			children = (
 				A10000000000000000000201 /* Core.swift */,
 				A10000000000000000000202 /* VideoFrames.swift */,
+				A10000000000000000000210 /* AudioStream.swift */,
 			);
 			name = Shared;
 			path = ../macos/Sources/KVM;
@@ -155,6 +158,7 @@
 			files = (
 				A10000000000000000000101 /* Core.swift in Sources */,
 				A10000000000000000000102 /* VideoFrames.swift in Sources */,
+				A10000000000000000000110 /* AudioStream.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

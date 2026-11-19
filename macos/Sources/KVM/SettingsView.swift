@@ -19,6 +19,9 @@ struct SettingsView: View {
     @State private var recording = false
     @State private var monitor: Any?
     @State private var launchAtLogin = Settings.launchAtLogin
+    @State private var lockTogether = Settings.lockTogether
+    @State private var wakePeer = Settings.wakePeer
+    @State private var showControlIndicator = Settings.showControlIndicator
     @State private var shareClipboard = Settings.shareClipboard
     @State private var clipboardFileLimit = Settings.clipboardFileLimit
     @State private var downloadDirectory = Settings.downloadDirectory
@@ -150,6 +153,16 @@ struct SettingsView: View {
                 Text("Press the shortcut on the computer whose keyboard you're using. Use at least one of ⌃ ⌥ ⌘.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Wake the other computer", isOn: $wakePeer)
+                    .onChange(of: wakePeer) { Settings.wakePeer = $0 }
+                Text("If it's asleep when you press the shortcut, send it a Wake-on-LAN packet (same network only; it needs \"Wake for network access\" turned on).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Lock both screens together", isOn: $lockTogether)
+                    .onChange(of: lockTogether) { Settings.lockTogether = $0 }
+                Text("Locking either computer locks the other too. Unlock each with its own password.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if awdlUp != nil || awdlInstalled {
@@ -222,6 +235,11 @@ struct SettingsView: View {
             Section("General") {
                 Toggle("Open at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { Settings.launchAtLogin = $0 }
+                Toggle("Show when this Mac is in use from elsewhere", isOn: $showControlIndicator)
+                    .onChange(of: showControlIndicator) { Settings.showControlIndicator = $0 }
+                Text("A panel at the top right while another computer or a phone controls or views this Mac, with a button to take it back.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Permissions") {

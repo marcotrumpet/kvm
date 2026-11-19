@@ -1,10 +1,15 @@
 import CoreMedia
+import VideoToolbox
 
 /// Turns ScreenHost's frame payloads into sample buffers for AVSampleBufferDisplayLayer
 /// (shared by the Mac viewer and the iPhone/iPad app).
 ///
-/// Payload: `nalLengthSize: u8 | parameterSetCount: u8 | (len: u16 BE, bytes)* | AVCC`.
+/// Payload: `codec << 7 | nalLengthSize: u8 | parameterSetCount: u8 | (len: u16 BE, bytes)* |
+/// AVCC`, codec 0 H.264 (SPS, PPS) or 1 HEVC (VPS, SPS, PPS).
 struct VideoFrames {
+    /// Whether this device decodes HEVC in hardware (worth asking the host for it).
+    static var decodesHEVC: Bool { VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC) }
+
     /// From the latest parameter sets; nil until the first keyframe.
     private(set) var format: CMVideoFormatDescription?
 
@@ -18,7 +23,8 @@ struct VideoFrames {
     mutating func sample(from frame: Data) -> (sample: CMSampleBuffer, newFormat: Bool)? {
         let bytes = [UInt8](frame)
         guard bytes.count >= 2 else { return nil }
-        let nalLength = Int32(bytes[0])
+        let hevc = bytes[0] & 0x80 != 0
+        let nalLength = Int32(bytes[0] & 0x7F)
         let count = Int(bytes[1])
         var offset = 2
         var sets: [[UInt8]] = []
@@ -34,9 +40,14 @@ struct VideoFrames {
         if !sets.isEmpty {
             var described: CMVideoFormatDescription?
             let status = VideoFrames.withPointers(sets) { pointers, sizes in
-                CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    allocator: nil, parameterSetCount: sets.count, parameterSetPointers: pointers,
-                    parameterSetSizes: sizes, nalUnitHeaderLength: nalLength, formatDescriptionOut: &described)
+                hevc
+                    ? CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                        allocator: nil, parameterSetCount: sets.count, parameterSetPointers: pointers,
+                        parameterSetSizes: sizes, nalUnitHeaderLength: nalLength, extensions: nil,
+                        formatDescriptionOut: &described)
+                    : CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                        allocator: nil, parameterSetCount: sets.count, parameterSetPointers: pointers,
+                        parameterSetSizes: sizes, nalUnitHeaderLength: nalLength, formatDescriptionOut: &described)
             }
             if status == noErr, let described {
                 format = described

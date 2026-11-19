@@ -36,6 +36,14 @@ enum CoreEvent {
     case stalled
     case recovered
     case disconnected(reason: String)
+    /// One encoded packet of the peer's sound (see `AudioHost`).
+    case audio(Data)
+    /// The peer's screen locked.
+    case lockRequested
+    /// The peer's MAC address, to wake it later.
+    case wakeAddress(Data)
+    /// The peer's user took their machine back: control and viewing ended there.
+    case takenBack
 }
 
 /// Machine-level events: discovery on this network and pairing. Background thread.
@@ -60,6 +68,10 @@ struct VideoParams: Equatable {
     var display: UInt32 = 0
     /// Re-lay out the host's main display to the viewer instead of only scaling.
     var fitHost = HostFit.off
+    /// The viewer decodes HEVC (the host then uses it if it can encode it).
+    var hevc = false
+    /// Also stream the host's sound.
+    var audio = false
 }
 
 /// How the host's main display follows the viewer (see `VideoParams.fit_host`).
@@ -69,6 +81,8 @@ enum HostFit: UInt8 {
     case size = 1
     /// At the viewer's aspect ratio, keeping about the host's own pixel count.
     case shape = 2
+    /// An extra display at the viewer's shape, next to the host's own (like Sidecar).
+    case extend = 3
 }
 
 /// What the host gives up first when bits run short.
@@ -247,7 +261,35 @@ final class Core {
     func requestVideo(_ p: VideoParams) {
         kvm_video_request(node, UInt16(clamping: p.maxWidth), UInt16(clamping: p.maxHeight),
                           UInt8(clamping: p.fps), UInt32(clamping: p.bitrateKbps), UInt8(p.prefer.rawValue), p.display,
-                          p.fitHost.rawValue)
+                          p.fitHost.rawValue, p.hevc ? 1 : 0, p.audio)
+    }
+
+    /// While the peer views this screen with audio: one encoded packet.
+    func sendAudio(_ data: Data) {
+        data.withUnsafeBytes { raw in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+            kvm_audio_send(node, base, raw.count)
+        }
+    }
+
+    /// This screen locked: the peer locks too.
+    func sendLock() { kvm_send_lock(node) }
+
+    /// Tells the peer how to wake this machine.
+    func sendWakeAddress(_ mac: Data) {
+        guard mac.count == 6 else { return }
+        mac.withUnsafeBytes { raw in kvm_send_wake_address(node, raw.bindMemory(to: UInt8.self).baseAddress) }
+    }
+
+    /// The user here takes this machine back from the peer. False if it wasn't using it.
+    @discardableResult
+    func takeBack() -> Bool { kvm_take_back(node) }
+
+    /// Sends a Wake-on-LAN packet for `mac` on this network.
+    @discardableResult
+    static func wake(mac: Data) -> Bool {
+        guard mac.count == 6 else { return false }
+        return mac.withUnsafeBytes { raw in kvm_wake(raw.bindMemory(to: UInt8.self).baseAddress) }
     }
 
     func stopVideo() { kvm_video_stop(node) }
@@ -342,7 +384,8 @@ private extension CoreEvent {
                 fps: Int((e.b >> 32) & 0xFF), bitrateKbps: Int(e.b & 0xFFFF_FFFF),
                 prefer: VideoPreference(rawValue: Int((e.b >> 40) & 0xFF)) ?? .balanced,
                 display: UInt32(truncatingIfNeeded: e.a >> 32),
-                fitHost: HostFit(rawValue: UInt8(truncatingIfNeeded: e.b >> 48)) ?? .off))
+                fitHost: HostFit(rawValue: UInt8(truncatingIfNeeded: e.b >> 48)) ?? .off,
+                hevc: (e.b >> 56) & 1 == 1, audio: (e.b >> 57) & 1 == 1))
         case KVM_EV_VIDEO_STOPPED: self = .videoStopped
         case KVM_EV_KEYFRAME_REQUESTED: self = .keyframeRequested
         case KVM_EV_VIDEO_FRAME:
@@ -358,6 +401,10 @@ private extension CoreEvent {
         case KVM_EV_CLIPBOARD: self = .clipboard(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
         case KVM_EV_STALLED: self = .stalled
         case KVM_EV_RECOVERED: self = .recovered
+        case KVM_EV_AUDIO: self = .audio(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
+        case KVM_EV_LOCK: self = .lockRequested
+        case KVM_EV_WAKE_ADDRESS: self = .wakeAddress(e.data.map { Data(bytes: $0, count: e.data_len) } ?? Data())
+        case KVM_EV_TAKEN_BACK: self = .takenBack
         default:
             let transfer = e.id.flatMap { UInt64(String(cString: $0)) } ?? 0
             switch Int(e.kind) {

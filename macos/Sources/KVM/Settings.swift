@@ -100,6 +100,36 @@ enum Settings {
         set { defaults.set(newValue, forKey: "viewerResizesHost") }
     }
 
+    /// Play the peer's sound while viewing its screen.
+    static var viewerAudio: Bool {
+        get { defaults.object(forKey: "viewerAudio") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "viewerAudio") }
+    }
+
+    /// Lock the paired computer's screen when this one locks, and the other way round.
+    static var lockTogether: Bool {
+        get { defaults.object(forKey: "lockTogether") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "lockTogether") }
+    }
+
+    /// Wake the paired computer (Wake-on-LAN) when switching to it while it is unreachable.
+    static var wakePeer: Bool {
+        get { defaults.object(forKey: "wakePeer") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "wakePeer") }
+    }
+
+    /// The paired computer's MAC address, as it last told us.
+    static var peerWakeAddress: Data? {
+        get { defaults.data(forKey: "peerWakeAddress") }
+        set { defaults.set(newValue, forKey: "peerWakeAddress") }
+    }
+
+    /// Show a panel while another device controls or views this Mac.
+    static var showControlIndicator: Bool {
+        get { defaults.object(forKey: "showControlIndicator") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "showControlIndicator") }
+    }
+
     /// The screen viewer's how-to-control tip was shown.
     static var viewerTipShown: Bool {
         get { defaults.bool(forKey: "viewerTipShown") }

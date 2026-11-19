@@ -34,6 +34,8 @@ final class Controller {
     let files: FileTransfers
     private let clipboard: ClipboardSync
     private let viewer = ScreenViewer()
+    private let audio = AudioPlayer()
+    private let indicator = ControlIndicator()
     private let injector = Injector()
     private let mode = OSAllocatedUnfairLock(initialState: Mode.local)
     /// Control was taken from the screen viewer (confined to the viewed display).
@@ -49,9 +51,19 @@ final class Controller {
         capture.setHotkey(Settings.hotkey)
         capture.onHotkey = { [unowned self] in toggle() }
         core.onEvent = { [unowned self] in handle($0) }
-        screenHost.onSharingChanged = { [unowned self] in state.sharingScreen = $0 }
+        screenHost.onSharingChanged = { [unowned self] in
+            state.sharingScreen = $0
+            updateIndicator()
+        }
+        indicator.onTakeBack = { [unowned self] in
+            if self.core.takeBack() { Log.info("took this Mac back from the peer") }
+        }
+        ScreenLock.observe { [unowned self] in
+            if state.connected, Settings.lockTogether { self.core.sendLock() }
+        }
         viewer.onClose = { [unowned self] in
             self.core.stopVideo()
+            audio.stop()
             state.viewingPeer = false
         }
         viewer.onClick = { [unowned self] point in controlFromViewer(at: point) }
@@ -62,6 +74,7 @@ final class Controller {
         injector.onEdgeExit = { [unowned self] edge, along in self.core.edgeExit(edge: edge, along: along) }
         viewer.onDecodeFailure = { [unowned self] in self.core.requestVideo(videoParams()) }
         viewer.onStreamSettingsChanged = { [unowned self] in
+            if !Settings.viewerAudio { audio.stop() }
             if state.viewingPeer { self.core.requestVideo(videoParams()) }
         }
         viewer.onDrop = { [unowned self] urls in files.send(urls) }
@@ -89,6 +102,8 @@ final class Controller {
         var params = Settings.viewerQuality.params(maxSize: size)
         params.display = viewer.selectedDisplay
         params.fitHost = viewer.fitsHost ? .size : .off
+        params.hevc = VideoFrames.decodesHEVC
+        params.audio = Settings.viewerAudio
         return params
     }
 
@@ -139,8 +154,13 @@ final class Controller {
 
     func controlPeer() {
         guard core.isConnected else {
-            Log.warn("can't control the peer: not connected")
-            NSSound.beep()
+            // Asleep, perhaps: try waking it (it connects back once it is up).
+            if Settings.wakePeer, let mac = Settings.peerWakeAddress, Core.wake(mac: mac) {
+                Log.info("peer not connected: sent it a wake-on-LAN packet")
+            } else {
+                Log.warn("can't control the peer: not connected")
+                NSSound.beep()
+            }
             return
         }
         let switched = mode.withLock { m -> Bool in
@@ -210,6 +230,7 @@ final class Controller {
             returnToLocal(notifyPeer: true)
             mode.withLock { $0 = .controlledByPeer }
             injector.begin()
+            Wake.display()
             publish(mode: .controlledByPeer)
         case .left:
             Log.info("peer released control")
@@ -239,6 +260,18 @@ final class Controller {
             DispatchQueue.main.async { self.files.handle(event) }
         case .videoFrame(let data, let keyframe):
             viewer.handle(frame: data, keyframe: keyframe)
+        case .audio(let data):
+            if Settings.viewerAudio { audio.handle(data) }
+        case .lockRequested:
+            guard Settings.lockTogether else { break }
+            returnToLocal(notifyPeer: true) // nothing to control on a locked screen
+            DispatchQueue.main.async { ScreenLock.lock() }
+        case .wakeAddress(let mac):
+            DispatchQueue.main.async { Settings.peerWakeAddress = mac }
+        case .takenBack:
+            Log.info("the peer took their computer back")
+            returnToLocal(notifyPeer: false)
+            DispatchQueue.main.async { self.stopViewing() }
         case .pointerAbs(let x, let y, let display):
             if mode.withLock({ $0 }) == .controlledByPeer { injector.warp(x: x, y: y, display: display) }
         case .confine(let display):
@@ -268,6 +301,7 @@ final class Controller {
                 self.state.stalled = false
                 self.clipboard.connected = true
                 self.updateHoverRect()
+                if let mac = Wake.macAddress() { self.core.sendWakeAddress(mac) }
                 if self.state.viewingPeer {
                     self.viewer.setStatus("Waiting for the screen…")
                     self.core.requestVideo(self.videoParams())
@@ -293,13 +327,23 @@ final class Controller {
                 self.clipboard.connected = false
                 self.updateHoverRect()
                 self.screenHost.stop()
+                self.audio.stop()
                 if self.state.viewingPeer { self.viewer.setStatus("Disconnected, reconnecting…") }
             }
         }
     }
 
     private func publish(mode: Mode) {
-        DispatchQueue.main.async { self.state.mode = mode }
+        DispatchQueue.main.async {
+            self.state.mode = mode
+            self.updateIndicator()
+        }
+    }
+
+    /// Main thread: show who uses this Mac, if anyone.
+    private func updateIndicator() {
+        indicator.update(name: state.peerName ?? "The other computer",
+                         controlling: state.mode == .controlledByPeer, viewing: state.sharingScreen)
     }
 
     /// Forgets the peer. Main thread only.

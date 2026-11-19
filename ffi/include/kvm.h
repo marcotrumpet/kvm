@@ -24,7 +24,7 @@ enum {
     KVM_EV_CONSUMER = 12,     // a = USB HID consumer usage (page 0x0C), flag = down
     KVM_EV_WHEEL = 13,        // mouse wheel notches: a = dx, b = dy
     KVM_EV_VIDEO_REQUESTED = 14, // start (or update) streaming: a = display << 32 | max_width << 16 | max_height,
-                                 // b = fit_host << 48 | prefer << 40 | fps << 32 | kbps
+                                 // b = audio << 57 | hevc << 56 | fit_host << 48 | prefer << 40 | fps << 32 | kbps
     KVM_EV_VIDEO_STOPPED = 15,
     KVM_EV_KEYFRAME_REQUESTED = 16,
     KVM_EV_VIDEO_FRAME = 17,  // data/data_len = encoded frame, flag = keyframe
@@ -38,6 +38,10 @@ enum {
                               // 2 top, 3 bottom) at b = 0..65535 along it
     KVM_EV_TEXT = 39,         // controlled: type text (layout-independent)
     KVM_EV_GESTURE = 40,      // controlled: a = kind << 8 | phase, b = value (see kvm_send_gesture)
+    KVM_EV_AUDIO = 41,        // viewing with audio: data/data_len = one encoded packet of the peer's sound
+    KVM_EV_LOCK = 42,         // the peer's screen locked: lock this one too
+    KVM_EV_WAKE_ADDRESS = 43, // data/data_len = the peer's MAC (6 bytes), for kvm_wake
+    KVM_EV_TAKEN_BACK = 44,   // the peer's user took their machine back: stop controlling and viewing
     // File transfers; `id` is the transfer id (decimal). For receive events, flag = the
     // files were copied on the peer (cached for pasting in <clipboard dir>/<id>/).
     KVM_EV_FILE_SEND_PROGRESS = 31,    // a = bytes sent, b = total
@@ -112,10 +116,13 @@ void kvm_send_gesture(const KvmNode *node, uint8_t kind, uint8_t phase, int32_t 
 // Screen viewing.
 // prefer: 0 balanced, 1 keep resolution (drop frame rate first), 2 keep frame rate.
 // fit_host: re-lay out the host's main display instead of scaling: 1 at max_width x max_height,
-// 2 at that aspect ratio but the host's own pixel count (0: off).
+// 2 at that aspect ratio but the host's own pixel count, 3 an extra display of that shape
+// next to the host's own (0: off). codecs: bit 0 = the viewer decodes HEVC. audio: also
+// stream the host's sound (KVM_EV_AUDIO).
 // Calling again while streaming updates the stream in place.
 void kvm_video_request(const KvmNode *node, uint16_t max_width, uint16_t max_height, uint8_t fps,
-                       uint32_t bitrate_kbps, uint8_t prefer, uint32_t display, uint8_t fit_host);
+                       uint32_t bitrate_kbps, uint8_t prefer, uint32_t display, uint8_t fit_host,
+                       uint8_t codecs, bool audio);
 void kvm_video_stop(const KvmNode *node);
 bool kvm_video_can_send(const KvmNode *node); // ask before encoding; skip the frame on false
 bool kvm_video_send_frame(const KvmNode *node, const uint8_t *data, size_t len, bool keyframe); // copies data
@@ -123,6 +130,13 @@ void kvm_pointer_abs(const KvmNode *node, uint16_t x, uint16_t y, uint32_t displ
 void kvm_send_display_list(const KvmNode *node, const uint8_t *data, size_t len);
 void kvm_confine(const KvmNode *node, uint32_t display); // 0xFFFFFFFF: not confined
 void kvm_edge_exit(const KvmNode *node, uint8_t edge, uint16_t along);
+void kvm_audio_send(const KvmNode *node, const uint8_t *data, size_t len); // copies data; dropped without datagrams
+
+// Lock, wake and take back.
+void kvm_send_lock(const KvmNode *node);
+void kvm_send_wake_address(const KvmNode *node, const uint8_t *mac); // 6 bytes
+bool kvm_take_back(const KvmNode *node);
+bool kvm_wake(const uint8_t *mac); // Wake-on-LAN broadcast on this network
 
 // Clipboard and files.
 void kvm_send_clipboard(const KvmNode *node, const uint8_t *data, size_t len); // copies data

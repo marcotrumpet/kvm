@@ -563,6 +563,24 @@ impl Link {
     pub fn ping(&self) {
         self.with(Session::ping)
     }
+
+    pub fn send_audio(&self, payload: Vec<u8>) {
+        self.with(|s| s.send_audio(payload))
+    }
+
+    pub fn send_lock(&self) {
+        self.with(Session::send_lock)
+    }
+
+    pub fn send_wake_address(&self, mac: Vec<u8>) {
+        self.with(|s| s.send_wake_address(mac))
+    }
+
+    /// False if the peer wasn't using this machine (or there is no session).
+    pub fn take_back(&self) -> bool {
+        let session = self.current.lock().unwrap().clone();
+        session.is_some_and(|s| s.take_back())
+    }
 }
 
 impl Drop for Link {

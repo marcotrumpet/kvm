@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
     private let frameSink = OSAllocatedUnfairLock<((Data) -> Void)?>(initialState: nil)
     /// What we asked the computer to stream, re-sent after reconnecting.
     private var videoParams: VideoParams?
+    private let audio = AudioPlayer()
     private let latency = OSAllocatedUnfairLock(initialState: (ema: 0.0, published: Date.distantPast))
 
     init() {
@@ -176,8 +177,14 @@ final class AppModel: ObservableObject {
         requestVideo(params)
     }
 
+    /// Silences the computer's sound until it is asked for again.
+    func stopAudio() {
+        audio.stop()
+    }
+
     func stopViewing() {
         frameSink.withLock { $0 = nil }
+        audio.stop()
         videoParams = nil
         displays = []
         core?.stopVideo()
@@ -237,6 +244,13 @@ final class AppModel: ObservableObject {
         switch event {
         case .videoFrame(let data, _):
             frameSink.withLock { $0 }?(data)
+        case .audio(let data):
+            if videoParams?.audio == true { audio.handle(data) }
+        case .takenBack:
+            DispatchQueue.main.async { [self] in
+                message = "\(active?.name ?? "The computer") took back control."
+                disconnect()
+            }
         case .connected(let name, let peer):
             core?.enter()
             DispatchQueue.main.async { [self] in
@@ -254,6 +268,7 @@ final class AppModel: ObservableObject {
         case .stalled:
             DispatchQueue.main.async { self.link = .stalled }
         case .disconnected:
+            audio.stop()
             DispatchQueue.main.async { self.resetLink(to: self.active == nil ? .idle : .connecting) }
         case .path(let direct, _):
             DispatchQueue.main.async { self.direct = direct }

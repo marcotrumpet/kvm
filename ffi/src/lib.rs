@@ -36,6 +36,10 @@ pub const KVM_EV_CONFINE: u32 = 37;
 pub const KVM_EV_EDGE_EXIT: u32 = 38;
 pub const KVM_EV_TEXT: u32 = 39;
 pub const KVM_EV_GESTURE: u32 = 40;
+pub const KVM_EV_AUDIO: u32 = 41;
+pub const KVM_EV_LOCK: u32 = 42;
+pub const KVM_EV_WAKE_ADDRESS: u32 = 43;
+pub const KVM_EV_TAKEN_BACK: u32 = 44;
 pub const KVM_EV_FILE_SEND_PROGRESS: u32 = 31;
 pub const KVM_EV_FILE_SEND_DONE: u32 = 32;
 pub const KVM_EV_FILE_RECEIVE_PROGRESS: u32 = 33;
@@ -295,7 +299,12 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
         Event::VideoRequested(p) => (
             KVM_EV_VIDEO_REQUESTED,
             ((p.display as i64) << 32) | ((p.max_width as i64) << 16) | p.max_height as i64,
-            ((p.fit_host as i64) << 48) | ((p.prefer as i64) << 40) | ((p.fps as i64) << 32) | p.bitrate_kbps as i64,
+            ((p.audio as i64) << 57)
+                | ((p.codecs as i64 & 1) << 56)
+                | ((p.fit_host as i64) << 48)
+                | ((p.prefer as i64) << 40)
+                | ((p.fps as i64) << 32)
+                | p.bitrate_kbps as i64,
             false,
         ),
         Event::VideoStopped => (KVM_EV_VIDEO_STOPPED, 0, 0, false),
@@ -348,6 +357,16 @@ fn dispatch(event: &Event, callback: KvmEventCallback, ctx: *mut c_void) {
             text = CString::new(reason.as_str()).ok();
             (KVM_EV_DISCONNECTED, 0, 0, false)
         }
+        Event::Audio(payload) => {
+            data = payload;
+            (KVM_EV_AUDIO, 0, 0, false)
+        }
+        Event::LockRequested => (KVM_EV_LOCK, 0, 0, false),
+        Event::WakeAddress(mac) => {
+            data = mac;
+            (KVM_EV_WAKE_ADDRESS, 0, 0, false)
+        }
+        Event::TakenBack => (KVM_EV_TAKEN_BACK, 0, 0, false),
     };
     let ev = KvmEvent {
         kind,
@@ -524,9 +543,21 @@ pub unsafe extern "C" fn kvm_video_request(
     prefer: u8,
     display: u32,
     fit_host: u8,
+    codecs: u8,
+    audio: bool,
 ) {
     with_link(node, |l| {
-        l.request_video(VideoParams { max_width, max_height, fps, bitrate_kbps, prefer, display, fit_host })
+        l.request_video(VideoParams {
+            max_width,
+            max_height,
+            fps,
+            bitrate_kbps,
+            prefer,
+            display,
+            fit_host,
+            codecs,
+            audio,
+        })
     })
 }
 
@@ -656,6 +687,68 @@ pub unsafe extern "C" fn kvm_send_text(node: *const KvmNode, text: *const c_char
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kvm_send_gesture(node: *const KvmNode, kind: u8, phase: u8, value: i32) {
     with_link(node, |l| l.send_gesture(kind, phase, value))
+}
+
+/// While the peer views our screen with audio: one encoded packet. Copies `data`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_audio_send(node: *const KvmNode, data: *const u8, len: usize) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+    let payload = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+    with_link(node, |l| l.send_audio(payload))
+}
+
+/// This machine's screen locked: the peer locks too (KVM_EV_LOCK there).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_send_lock(node: *const KvmNode) {
+    with_link(node, Link::send_lock)
+}
+
+/// Tells the peer this machine's MAC address (6 bytes), for `kvm_wake` later.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_send_wake_address(node: *const KvmNode, mac: *const u8) {
+    if mac.is_null() {
+        return;
+    }
+    let mac = unsafe { std::slice::from_raw_parts(mac, 6) }.to_vec();
+    with_link(node, |l| l.send_wake_address(mac))
+}
+
+/// The user here takes this machine back from the peer (stops its control and viewing).
+/// False if the peer wasn't using it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_take_back(node: *const KvmNode) -> bool {
+    let node = unsafe { &*node };
+    node.link.lock().unwrap().as_ref().is_some_and(|l| l.take_back())
+}
+
+/// Sends a Wake-on-LAN magic packet for `mac` (6 bytes) to this network's broadcast address.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kvm_wake(mac: *const u8) -> bool {
+    if mac.is_null() {
+        return false;
+    }
+    let mac = unsafe { std::slice::from_raw_parts(mac, 6) };
+    let mut packet = vec![0xFF; 6];
+    for _ in 0..16 {
+        packet.extend_from_slice(mac);
+    }
+    let send = || -> std::io::Result<()> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        socket.set_broadcast(true)?;
+        for port in [9, 7] {
+            socket.send_to(&packet, ("255.255.255.255", port))?;
+        }
+        Ok(())
+    };
+    match send() {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!("sending wake-on-LAN packet: {err}");
+            false
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

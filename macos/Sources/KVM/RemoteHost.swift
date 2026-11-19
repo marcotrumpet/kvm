@@ -8,6 +8,8 @@ final class RemoteState: ObservableObject {
     /// The one connected now.
     @Published var connectedID: String?
     @Published var sharingScreen = false
+    /// The connected remote control is driving this Mac.
+    @Published var controlling = false
 }
 
 /// Lets paired remote controls (iPhone, iPad) drive this Mac and view its screen, on their
@@ -20,6 +22,7 @@ final class RemoteHost {
     private let screenHost: ScreenHost
     private let clipboard: ClipboardSync
     private let controlled = OSAllocatedUnfairLock(initialState: false)
+    private let indicator = ControlIndicator(slot: 1)
 
     /// `core`: a `Core(remotesOf:)` handle.
     init(core: Core) {
@@ -29,7 +32,13 @@ final class RemoteHost {
         clipboard.shareFiles = false
         core.onEvent = { [unowned self] in handle($0) }
         injector.onEdgeExit = { [unowned self] edge, along in self.core.edgeExit(edge: edge, along: along) }
-        screenHost.onSharingChanged = { [unowned self] in state.sharingScreen = $0 }
+        screenHost.onSharingChanged = { [unowned self] in
+            state.sharingScreen = $0
+            updateIndicator()
+        }
+        indicator.onTakeBack = { [unowned self] in
+            if self.core.takeBack() { Log.info("took this Mac back from the remote control") }
+        }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [unowned self] _ in
@@ -74,6 +83,20 @@ final class RemoteHost {
             return c
         }
         if was { injector.end() }
+        setControlling(false)
+    }
+
+    private func setControlling(_ on: Bool) {
+        DispatchQueue.main.async { [self] in
+            state.controlling = on
+            updateIndicator()
+        }
+    }
+
+    /// Main thread: show who uses this Mac, if anyone.
+    private func updateIndicator() {
+        let name = state.connectedID.flatMap { state.paired[$0] } ?? "A remote control"
+        indicator.update(name: name, controlling: state.controlling, viewing: state.sharingScreen)
     }
 
     private func disconnected() {
@@ -92,6 +115,8 @@ final class RemoteHost {
             Log.info("remote control took control")
             controlled.withLock { $0 = true }
             injector.begin()
+            Wake.display()
+            setControlling(true)
         case .left:
             release()
         case .move(let dx, let dy):
@@ -116,6 +141,7 @@ final class RemoteHost {
             if isControlled() { injector.confine(display: display) }
         case .videoRequested(let params):
             Log.info("remote control asked to view this screen")
+            Wake.display()
             DispatchQueue.main.async {
                 self.screenHost.start(params)
                 self.core.sendDisplayList(Displays.encode(Displays.current()))
@@ -138,8 +164,8 @@ final class RemoteHost {
         case .disconnected:
             disconnected()
         case .path, .latency, .recovered, .videoFrame, .displayList, .edgeExit, .fileSendProgress, .fileSendDone,
-             .fileReceiveProgress, .fileReceived, .fileReceiveFailed:
-            break
+             .fileReceiveProgress, .fileReceived, .fileReceiveFailed, .audio, .lockRequested, .wakeAddress, .takenBack:
+            break // a remote control never shares its screen, locks or gets controlled
         }
     }
 }

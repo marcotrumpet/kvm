@@ -204,7 +204,7 @@ async fn main() -> Result<()> {
                         }
                         if let Some(secs) = view {
                             view_until = Some(Instant::now() + Duration::from_secs(secs));
-                            link.request_video(VideoParams { max_width: 1920, max_height: 1080, fps: 60, bitrate_kbps: kbps, prefer: 0, display: 0, fit_host: 0 });
+                            link.request_video(VideoParams { max_width: 1920, max_height: 1080, fps: 60, bitrate_kbps: kbps, prefer: 0, display: 0, fit_host: 0, codecs: 0, audio: false });
                         }
                         if let Some(secs) = synthetic {
                             tokio::spawn(synthetic_input(link.clone(), secs));

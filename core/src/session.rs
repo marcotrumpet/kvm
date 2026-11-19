@@ -88,6 +88,14 @@ pub enum Event {
     Stalled,
     Recovered,
     Disconnected { reason: String },
+    /// An encoded audio packet of the peer's sound, while viewing it with audio.
+    Audio(Vec<u8>),
+    /// The peer's screen locked: lock this one too.
+    LockRequested,
+    /// How to wake the peer later (its MAC address).
+    WakeAddress(Vec<u8>),
+    /// The peer's user took their machine back: control and viewing ended there.
+    TakenBack,
 }
 
 pub(crate) type EventTx = mpsc::UnboundedSender<Event>;
@@ -403,6 +411,51 @@ impl Session {
         }
     }
 
+    /// Sends one encoded audio packet while the peer views our screen. Dropped when the
+    /// path carries no datagrams: late sound is worse than none.
+    pub fn send_audio(&self, payload: Vec<u8>) {
+        if self.shared.hosting.load(Ordering::Acquire) {
+            let bytes = protocol::encode_datagram(&Datagram::Audio(payload));
+            if let Err(err) = self.shared.conn.send_datagram(bytes.into()) {
+                trace!("audio packet dropped: {err}");
+            }
+        }
+    }
+
+    /// Our screen locked: asks the peer to lock too.
+    pub fn send_lock(&self) {
+        self.shared.send(Control::Lock);
+    }
+
+    /// Tells the peer how to wake this machine (see [`Control::WakeAddress`]).
+    pub fn send_wake_address(&self, mac: Vec<u8>) {
+        self.shared.send(Control::WakeAddress(mac));
+    }
+
+    /// The user here takes the machine back from the peer: releases its input, stops
+    /// sharing the screen, and tells the peer to stop. False if it wasn't using it.
+    pub fn take_back(&self) -> bool {
+        let events = &self.shared.events;
+        let controlled = {
+            let mut rx = self.shared.rx.lock().unwrap();
+            let controlled = rx.controlled;
+            if controlled {
+                rx.release(events); // lifts held input, reports `Left`
+            }
+            controlled
+        };
+        let hosting = self.shared.hosting.swap(false, Ordering::AcqRel);
+        if !controlled && !hosting {
+            return false;
+        }
+        if hosting {
+            stop_rate_control(&self.shared);
+            let _ = events.send(Event::VideoStopped);
+        }
+        self.shared.send(Control::TakeBack);
+        true
+    }
+
     /// Sends an extra ping; the answer arrives as [`Event::Latency`].
     pub fn ping(&self) {
         send_ping(&self.shared);
@@ -554,6 +607,21 @@ async fn control_loop(shared: Arc<Shared>, mut recv: RecvStream) {
                     let _ = events.send(Event::Gesture { kind, phase, value });
                 }
             }
+            Control::Lock => {
+                let _ = events.send(Event::LockRequested);
+            }
+            Control::WakeAddress(mac) => {
+                if mac.len() == 6 {
+                    let _ = events.send(Event::WakeAddress(mac));
+                }
+            }
+            Control::TakeBack => {
+                let was_controlling = shared.controlling.swap(false, Ordering::AcqRel);
+                let was_viewing = shared.viewing.swap(false, Ordering::AcqRel);
+                if was_controlling || was_viewing {
+                    let _ = events.send(Event::TakenBack);
+                }
+            }
             Control::Hello { .. } => warn!("unexpected hello mid-session"),
         }
     }
@@ -563,6 +631,11 @@ async fn datagram_loop(shared: Arc<Shared>) {
     while let Ok(bytes) = shared.conn.read_datagram().await {
         match protocol::decode_datagram(&bytes) {
             Ok(Datagram::Motion(m)) => shared.rx.lock().unwrap().catch_up(m, &shared.events),
+            Ok(Datagram::Audio(payload)) => {
+                if shared.viewing.load(Ordering::Acquire) {
+                    let _ = shared.events.send(Event::Audio(payload));
+                }
+            }
             Err(err) => warn!("bad datagram: {err:#}"),
         }
     }

@@ -70,6 +70,10 @@ pub struct VideoParams {
     /// host's own number of pixels (so a zoomed-in viewer can ask for more); 0 off. Ignored
     /// for other displays. (A `u8` that was a `bool`: same encoding for 0 and 1.)
     pub fit_host: u8,
+    /// Codecs the viewer decodes besides H.264: bit 0 HEVC.
+    pub codecs: u8,
+    /// Also stream the host's sound (as `Datagram::Audio`).
+    pub audio: bool,
 }
 
 /// Measurements since the last rate tick.
