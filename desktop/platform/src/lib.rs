@@ -93,7 +93,7 @@ pub mod video;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater};
+pub use windows::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater, viewer};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -104,6 +104,6 @@ pub use linux::{Injector, capture, clipboard, dialog, system_proxy, ui, updater}
 #[cfg(not(windows))]
 mod unsupported;
 #[cfg(target_os = "linux")]
-pub use unsupported::screen;
+pub use unsupported::{screen, viewer};
 #[cfg(not(any(windows, target_os = "linux")))]
-pub use unsupported::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater};
+pub use unsupported::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater, viewer};

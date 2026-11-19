@@ -4,6 +4,7 @@ mod keymap;
 pub mod capture;
 pub mod screen;
 pub mod ui;
+pub mod viewer;
 
 pub use inject::Injector;
 

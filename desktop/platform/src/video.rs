@@ -117,6 +117,51 @@ impl H264Packager {
     }
 }
 
+/// The other way, for viewing: a payload back to Annex B, the parameter sets (if any) first.
+/// Returns (HEVC, keyframe-capable, stream); None if malformed.
+pub fn unpack(payload: &[u8]) -> Option<(bool, bool, Vec<u8>)> {
+    let (&head, rest) = payload.split_first()?;
+    let (hevc, nal_len) = (head & 0x80 != 0, (head & 0x7F) as usize);
+    if !(1..=4).contains(&nal_len) {
+        return None;
+    }
+    let (&count, mut rest) = rest.split_first()?;
+    let mut out = Vec::with_capacity(payload.len() + 16);
+    for _ in 0..count {
+        let len = u16::from_be_bytes(rest.get(..2)?.try_into().ok()?) as usize;
+        out.extend_from_slice(&[0, 0, 0, 1]);
+        out.extend_from_slice(rest.get(2..2 + len)?);
+        rest = &rest[2 + len..];
+    }
+    while !rest.is_empty() {
+        let len = rest.get(..nal_len)?.iter().fold(0usize, |n, &b| n << 8 | b as usize);
+        out.extend_from_slice(&[0, 0, 0, 1]);
+        out.extend_from_slice(rest.get(nal_len..nal_len + len)?);
+        rest = &rest[nal_len + len..];
+    }
+    Some((hevc, count > 0, out))
+}
+
+/// NV12 (BT.709 limited range; `stride` bytes per row, chroma after `stride * plane_rows`)
+/// to BGRA, `width` x `height`.
+pub fn nv12_to_bgra(src: &[u8], width: usize, height: usize, stride: usize, plane_rows: usize, out: &mut Vec<u8>) {
+    out.resize(width * height * 4, 0);
+    let chroma = stride * plane_rows;
+    for y in 0..height {
+        let row = &src[y * stride..];
+        let uv = &src[chroma + (y / 2) * stride..];
+        let dst = &mut out[y * width * 4..(y + 1) * width * 4];
+        for x in 0..width {
+            let c = (row[x] as i32 - 16) * 298;
+            let (u, v) = (uv[x & !1] as i32 - 128, uv[(x & !1) + 1] as i32 - 128);
+            let r = (c + 459 * v + 128) >> 8;
+            let g = (c - 55 * u - 136 * v + 128) >> 8;
+            let b = (c + 541 * u + 128) >> 8;
+            dst[x * 4..x * 4 + 4].copy_from_slice(&[b.clamp(0, 255) as u8, g.clamp(0, 255) as u8, r.clamp(0, 255) as u8, 255]);
+        }
+    }
+}
+
 /// Fits `width` x `height` within the viewer's maximum, keeping the aspect ratio, in even
 /// numbers (the encoder's 4:2:0 needs them).
 pub fn fit(width: u32, height: u32, max_width: u16, max_height: u16) -> (u32, u32) {
@@ -207,6 +252,31 @@ mod tests {
         // A later keyframe without in-band SPS/PPS reuses the remembered ones.
         let again = p.package(&[0, 0, 0, 1, 0x65, 1], true).unwrap();
         assert_eq!(&again[..2], &[4, 2]);
+    }
+
+    #[test]
+    fn unpacks_what_it_packs() {
+        let stream = [0, 0, 0, 1, 0x67, 9, 9, 0, 0, 0, 1, 0x68, 8, 0, 0, 0, 1, 0x65, 7, 7, 7];
+        let payload = H264Packager::default().package(&stream, true).unwrap();
+        assert_eq!(unpack(&payload), Some((false, true, stream.to_vec())));
+        assert_eq!(unpack(&payload[..payload.len() - 1]), None);
+    }
+
+    #[test]
+    fn colors_survive_nv12_both_ways() {
+        let (w, h) = (4u32, 2u32);
+        let mut src = Vec::new();
+        for _ in 0..(w * h) {
+            src.extend_from_slice(&[40, 160, 220, 255]); // BGRA: an orange
+        }
+        let (mut nv12, mut back) = (Vec::new(), Vec::new());
+        bgra_to_nv12(&src, w, h, (w * 4) as usize, w, h, &mut nv12);
+        nv12_to_bgra(&nv12, w as usize, h as usize, w as usize, h as usize, &mut back);
+        for px in back.chunks(4) {
+            for (got, want) in px[..3].iter().zip([40u8, 160, 220]) {
+                assert!((*got as i32 - want as i32).abs() <= 6, "{px:?}");
+            }
+        }
     }
 
     #[test]

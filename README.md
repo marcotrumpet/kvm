@@ -113,8 +113,9 @@ paired ones are listed (and removed) under iPhone and iPad. Files: Send Files in
 menu (or from the Mac's menu bar icon to this computer); they arrive in Downloads. Locking
 either computer locks both (Windows; the tray menu turns it off). The Mac's screen viewer and
 the iPhone/iPad app can show the Windows screen (DXGI capture, Media Foundation H.264, every
-display; Stop Sharing This Screen in the tray). Not yet: sharing the Linux screen, viewing the
-Mac's screen from Windows, the microphone.
+display; Stop Sharing This Screen in the tray), and Windows can show the Mac's screen (View
+… Screen in the tray; click the picture to control the Mac there). Not yet: the Linux screen
+either way, the microphone.
 
 To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair With in
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.

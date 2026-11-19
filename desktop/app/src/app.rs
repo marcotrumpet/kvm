@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent};
 use kvm_platform::screen::ScreenHost;
 use kvm_platform::video::{ScreenParams, display_list_json};
+use kvm_platform::viewer::{self, ViewerEvent};
 use kvm_platform::{Delegate, Injector, Input, MenuEntry, capture, dialog, screen, ui, updater};
 use tokio::runtime::Handle;
 use tracing::{info, warn};
@@ -73,6 +74,8 @@ struct State {
     asking: Option<EndpointId>,
     /// A remote control (named) is controlling this computer.
     remote_controlling: Option<String>,
+    /// The picture size last asked of the peer for the viewer.
+    viewer_size: Option<(u32, u32)>,
 }
 
 impl App {
@@ -94,6 +97,7 @@ impl App {
                 pairing_until: None,
                 asking: None,
                 remote_controlling: None,
+                viewer_size: None,
             }),
             config: Mutex::new(config),
             link: Mutex::new(None),
@@ -303,6 +307,68 @@ impl App {
         true
     }
 
+    // MARK: Viewing the peer's screen
+
+    fn open_viewer(&self) {
+        let Some(app) = self.me.upgrade() else { return };
+        let peer = self.state.lock().unwrap().peer_name.clone().unwrap_or_else(|| "The other computer".into());
+        let handler: viewer::ViewerHandler = Arc::new(move |event| app.viewer_event(event));
+        if let Some(size) = viewer::open(&format!("{peer}'s Screen"), handler) {
+            self.request_view(size, true);
+        }
+        self.refresh();
+    }
+
+    /// Asks the peer for a picture of `size` (the window's), unless it barely changed.
+    fn request_view(&self, size: (u32, u32), force: bool) {
+        let previous = self.state.lock().unwrap().viewer_size;
+        let close = |a: u32, b: u32| (a as f64 / b.max(1) as f64 - 1.0).abs() < 0.1;
+        if !force && previous.is_some_and(|(w, h)| close(size.0, w) && close(size.1, h)) {
+            return;
+        }
+        self.state.lock().unwrap().viewer_size = Some(size);
+        let Some(link) = self.link() else { return };
+        let params = kvm_core::VideoParams {
+            max_width: size.0.min(3840) as u16,
+            max_height: size.1.min(2400) as u16,
+            fps: 60,
+            bitrate_kbps: 40_000,
+            prefer: 0,
+            display: 0,
+            fit_host: 0,
+            codecs: 0, // H.264 only
+            audio: false,
+        };
+        let _rt = self.rt.enter();
+        link.request_video(params);
+    }
+
+    fn viewer_event(&self, event: ViewerEvent) {
+        match event {
+            ViewerEvent::Closed => {
+                self.state.lock().unwrap().viewer_size = None;
+                if let Some(link) = self.link() {
+                    let _rt = self.rt.enter();
+                    link.stop_video();
+                }
+                self.refresh();
+            }
+            ViewerEvent::Resized { width, height } => self.request_view((width, height), false),
+            ViewerEvent::Clicked { x, y } => {
+                // Clicking the picture takes control, with the peer's pointer where it was clicked.
+                if self.mode() == Mode::Local {
+                    self.control_peer();
+                }
+                if self.mode() == Mode::Controlling
+                    && let Some(link) = self.link()
+                {
+                    let _rt = self.rt.enter();
+                    link.pointer_abs(x, y, 0);
+                }
+            }
+        }
+    }
+
     fn stop_screen(&self, remote: bool) {
         let stopped = {
             let mut current = self.screen.lock().unwrap();
@@ -418,6 +484,9 @@ impl App {
                     config.save(&self.config_dir);
                 }
                 drop(config);
+                if let Some(size) = viewer::size() {
+                    self.request_view(size, true); // the viewer was open: resume the picture
+                }
                 self.refresh();
             }
             Event::Disconnected { reason } => {
@@ -471,6 +540,7 @@ impl App {
             Event::Consumer { usage, down } if controlled() => self.injector.consumer(usage, down),
             Event::Text(text) if controlled() => self.injector.text(&text),
             Event::PointerAbs { x, y, display } if controlled() => self.injector.warp(x, y, display),
+            Event::VideoFrame { payload, .. } => viewer::frame(payload),
             Event::Clipboard(payload) => {
                 if self.config.lock().unwrap().share_clipboard {
                     let message = match clipboard::decode_files(&payload) {
@@ -820,6 +890,14 @@ impl App {
                 checked: None,
             });
         }
+        if config.peer_id.is_some() && viewer::supported() {
+            let connected = self.state.lock().unwrap().connected;
+            menu.push(if viewer::is_open() {
+                MenuEntry::item("view", format!("Close {peer}'s Screen"))
+            } else {
+                MenuEntry::Item { id: "view".into(), label: format!("View {peer}'s Screen"), enabled: connected, checked: None }
+            });
+        }
         menu.push(MenuEntry::item("received", "Show Received Files"));
         if self.sharing() {
             menu.push(MenuEntry::item("stop-sharing", "Stop Sharing This Screen"));
@@ -912,6 +990,13 @@ impl Delegate for App {
                 }
             }
             "received" => open(&crate::config::downloads_dir()),
+            "view" => {
+                if viewer::is_open() {
+                    viewer::close();
+                } else {
+                    self.open_viewer();
+                }
+            }
             "stop-sharing" => {
                 let stopped = self.screen.lock().unwrap().take();
                 drop(stopped);

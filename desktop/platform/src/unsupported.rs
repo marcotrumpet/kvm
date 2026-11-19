@@ -51,6 +51,35 @@ pub mod screen {
     }
 }
 
+/// Viewing the peer's screen isn't available here yet.
+pub mod viewer {
+    use std::sync::Arc;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ViewerEvent {
+        Closed,
+        Clicked { x: u16, y: u16 },
+        Resized { width: u32, height: u32 },
+    }
+
+    pub type ViewerHandler = Arc<dyn Fn(ViewerEvent) + Send + Sync>;
+
+    pub fn supported() -> bool {
+        false
+    }
+    pub fn is_open() -> bool {
+        false
+    }
+    pub fn open(_title: &str, _handler: ViewerHandler) -> Option<(u32, u32)> {
+        None
+    }
+    pub fn size() -> Option<(u32, u32)> {
+        None
+    }
+    pub fn frame(_payload: Vec<u8>) {}
+    pub fn close() {}
+}
+
 pub mod capture {
     pub fn set_hotkey(_hotkey: crate::Hotkey) {}
     pub fn set_remote(_on: bool) {}
