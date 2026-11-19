@@ -89,6 +89,8 @@ final class RemoteViewController: UIViewController {
     private var mouseRemainder = CGPoint.zero
     private var lastMouseMove: CFTimeInterval = 0
     private var mouseObservers: [NSObjectProtocol] = []
+    /// Briefly not asking for the pointer lock, so iPadOS grants it afresh (`relockPointer`).
+    private var relocking = false
 
     init(model: AppModel) {
         self.model = model
@@ -101,7 +103,7 @@ final class RemoteViewController: UIViewController {
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
-    override var prefersPointerLocked: Bool { true }
+    override var prefersPointerLocked: Bool { !relocking }
     override var canBecomeFirstResponder: Bool { true }
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
 
@@ -1057,11 +1059,36 @@ final class RemoteViewController: UIViewController {
 
     private func startMice() {
         GCMouse.mice().forEach(attach)
-        mouseObservers = [
-            NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) { [weak self] note in
-                if let mouse = note.object as? GCMouse { self?.attach(mouse) }
-            },
-        ]
+        // Detaching a Magic Keyboard and attaching it again (or any trackpad or mouse coming
+        // back) left the pointer unlocked, or locked with nothing arriving, until the screen
+        // was left: ask for the lock again and re-attach every mouse once it has settled.
+        mouseObservers = [Notification.Name.GCMouseDidConnect, .GCKeyboardDidConnect].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.mouseReconnected()
+            }
+        }
+    }
+
+    private func mouseReconnected() {
+        GCMouse.mice().forEach(attach)
+        relockPointer()
+        // The new mouse's input can show up a moment after it connects.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, view.window != nil else { return }
+            GCMouse.mice().forEach(attach)
+        }
+    }
+
+    /// iPadOS asks again only when the answer changes, so let go of the lock and take it back.
+    private func relockPointer() {
+        guard !relocking else { return }
+        relocking = true
+        setNeedsUpdateOfPrefersPointerLocked()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            relocking = false
+            setNeedsUpdateOfPrefersPointerLocked()
+        }
     }
 
     private func stopMice() {
