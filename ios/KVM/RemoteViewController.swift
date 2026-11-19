@@ -528,6 +528,9 @@ final class RemoteViewController: UIViewController {
         let main = model.displays.first(where: \.main)
         resolutionButton.isHidden = barCollapsed || !screenOn || (main != nil && main?.bounds == nil)
         let current = Prefs.textSize
+        if let base = TextSize.defaultResolution(of: main, current: current) {
+            Prefs.lastDefaultResolution = (base, model.active?.name ?? "")
+        }
         resolutionButton.menu = UIMenu(title: "Resolution", children: TextSize.ordered.map { size in
             UIAction(title: size.label(for: main, current: current),
                      subtitle: size == .standard ? nil : size.scale > 1 ? "Bigger" : "More space",
@@ -1223,6 +1226,19 @@ enum Prefs {
     static var textSize: TextSize {
         get { TextSize(rawValue: UInt8(clamping: defaults.integer(forKey: "textSize"))) ?? .standard }
         set { defaults.set(Int(newValue.rawValue), forKey: "textSize") }
+    }
+
+    /// The last computer shown here: its main display's default resolution while shown (for
+    /// Settings, which has no computer to ask), and its name.
+    static var lastDefaultResolution: (size: CGSize, computer: String)? {
+        get {
+            guard let wh = defaults.array(forKey: "lastDefaultResolution") as? [Double], wh.count == 2 else { return nil }
+            return (CGSize(width: wh[0], height: wh[1]), defaults.string(forKey: "lastResolutionComputer") ?? "")
+        }
+        set {
+            defaults.set(newValue.map { [Double($0.size.width), Double($0.size.height)] }, forKey: "lastDefaultResolution")
+            defaults.set(newValue?.computer, forKey: "lastResolutionComputer")
+        }
     }
 
     /// Only watch the computer's screen: this device doesn't take control of it.

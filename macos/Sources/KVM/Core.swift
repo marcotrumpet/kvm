@@ -113,14 +113,28 @@ enum TextSize: UInt8, CaseIterable {
     func resolution(of main: DisplayInfo?, current: TextSize) -> CGSize? {
         guard let b = main?.bounds, b.width > 0 else { return nil }
         if self == current { return b.size }
-        func side(_ v: CGFloat) -> CGFloat { CGFloat(Int(v * current.scale / scale) & ~1) }
-        return CGSize(width: side(b.width), height: side(b.height))
+        return resolution(default: TextSize.defaultResolution(of: main, current: current) ?? b.size)
+    }
+
+    /// What this gives a display whose default resolution is `base`.
+    func resolution(default base: CGSize) -> CGSize {
+        func side(_ v: CGFloat) -> CGFloat { self == .standard ? v : CGFloat(Int(v / scale) & ~1) }
+        return CGSize(width: side(base.width), height: side(base.height))
+    }
+
+    /// The default resolution of `main`, listed at `current`.
+    static func defaultResolution(of main: DisplayInfo?, current: TextSize) -> CGSize? {
+        guard let b = main?.bounds, b.width > 0 else { return nil }
+        return CGSize(width: (b.width * current.scale).rounded(), height: (b.height * current.scale).rounded())
     }
 
     /// "1366 × 1024", or the title when the resolution isn't known.
     func label(for main: DisplayInfo?, current: TextSize) -> String {
-        guard let r = resolution(of: main, current: current) else { return title }
-        return "\(Int(r.width)) × \(Int(r.height))" + (self == .standard ? " (default)" : "")
+        resolution(of: main, current: current).map(label) ?? title
+    }
+
+    func label(_ r: CGSize) -> String {
+        "\(Int(r.width)) × \(Int(r.height))" + (self == .standard ? " (default)" : "")
     }
 }
 

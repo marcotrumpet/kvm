@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("sendMicrophone") private var sendMicrophone = false
     @AppStorage("viewOnly") private var viewOnly = false
     @State private var tipsReset = false
+    private let lastResolution = Prefs.lastDefaultResolution
 
     var body: some View {
         NavigationStack {
@@ -39,7 +40,7 @@ struct SettingsView: View {
                     Text("Trackpad moves the pointer like a laptop's trackpad; direct touch clicks where you tap on the picture. Pointer speed is for trackpad mode and for a mouse or trackpad connected to an iPad.")
                 }
 
-                Section("Screen") {
+                Section {
                     Toggle("Show the computer's screen", isOn: $screenOn)
                     Picker("Computer's screen", selection: $hostFit) {
                         Text("Keep its resolution").tag(Int(HostFit.off.rawValue))
@@ -48,7 +49,8 @@ struct SettingsView: View {
                     }
                     Picker("Resolution", selection: $textSize) {
                         ForEach(TextSize.ordered, id: \.rawValue) { size in
-                            Text(size.title).tag(Int(size.rawValue))
+                            Text(lastResolution.map { size.label(size.resolution(default: $0.size)) } ?? size.title)
+                                .tag(Int(size.rawValue))
                         }
                     }
                     Picker("Quality", selection: $quality) {
@@ -58,6 +60,14 @@ struct SettingsView: View {
                     }
                     Toggle("Play the computer's sound", isOn: $sound)
                     Toggle("View only", isOn: $viewOnly)
+                } header: {
+                    Text("Screen")
+                } footer: {
+                    if let last = lastResolution, !last.computer.isEmpty {
+                        Text("Resolutions as on \(last.computer), the last computer shown. A lower one makes everything bigger and easier to tap. You can also change it while connected, with the aA button.")
+                    } else {
+                        Text("A lower resolution makes everything on the computer bigger and easier to tap. You can also change it while connected, with the aA button.")
+                    }
                 }
 
                 Section {
