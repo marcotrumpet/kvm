@@ -43,8 +43,10 @@ final class AppModel: ObservableObject {
 
     let core: Core?
     let startError: String?
-    /// Set while viewing; called on the core's thread with each encoded frame.
-    private let frameSink = OSAllocatedUnfairLock<((Data) -> Void)?>(initialState: nil)
+    /// Set while viewing; called on the core's thread with each encoded frame. Boxed in a
+    /// class: a bare closure in the lock's generic state gained reabstraction thunks on every
+    /// `withLock` (two per frame), and freeing thousands of them overflowed the stack.
+    private let frameSink = OSAllocatedUnfairLock<FrameSink?>(initialState: nil)
     /// What we asked the computer to stream, re-sent after reconnecting.
     private var videoParams: VideoParams?
     private let audio = AudioPlayer()
@@ -199,7 +201,7 @@ final class AppModel: ObservableObject {
 
     /// Starts (or updates) the stream; `sink` gets each frame on the core's thread.
     func view(_ params: VideoParams, sink: @escaping (Data) -> Void) {
-        frameSink.withLock { $0 = sink }
+        frameSink.withLock { $0 = FrameSink(send: sink) }
         var params = params
         params.display = selectedDisplay
         requestVideo(params)
@@ -271,7 +273,7 @@ final class AppModel: ObservableObject {
     private func handle(_ event: CoreEvent) {
         switch event {
         case .videoFrame(let data, _):
-            frameSink.withLock { $0 }?(data)
+            frameSink.withLock { $0 }?.send(data)
         case .audio(let data):
             if videoParams?.audio == true { audio.handle(data) }
         case .takenBack:
@@ -331,6 +333,14 @@ final class AppModel: ObservableObject {
         default:
             break // this device is never controlled and never hosts its screen
         }
+    }
+}
+
+private final class FrameSink: @unchecked Sendable {
+    let send: (Data) -> Void
+
+    init(send: @escaping (Data) -> Void) {
+        self.send = send
     }
 }
 
