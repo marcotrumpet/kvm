@@ -122,6 +122,12 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         qualityMenu.action = #selector(qualityChanged)
         qualityMenu.controlSize = .small
         qualityMenu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        qualityMenu.toolTip = """
+            What to keep when the network is slow. Auto: balance both. Sharp text: resolution, \
+            at a lower frame rate. Smooth motion: frame rate, at a lower resolution. Data saver: \
+            less data overall.
+            """
+        matchWindow.toolTip = "Stream at this window's size, using less bandwidth. Off: always the full resolution"
         matchWindow.state = Settings.viewerMatchesWindow ? .on : .off
         matchWindow.target = self
         matchWindow.action = #selector(matchWindowChanged)
@@ -132,7 +138,8 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         resizeHost.action = #selector(resizeHostChanged)
         resizeHost.controlSize = .small
         resizeHost.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        resizeHost.toolTip = "Change the other computer's resolution to fit this window"
+        resizeHost.toolTip = "Change the other computer's resolution and shape to fit this window, while viewing it"
+        hoverControl.toolTip = "Take control as soon as the pointer enters the picture. Off: click into it"
         hoverControl.state = Settings.viewerHoverControl ? .on : .off
         hoverControl.target = self
         hoverControl.action = #selector(hoverControlChanged)
@@ -140,6 +147,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         hoverControl.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         stats.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         stats.textColor = .secondaryLabelColor
+        stats.toolTip = "The stream's resolution, frames per second and data rate"
         let label = NSTextField(labelWithString: "Quality:")
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         displayMenu.target = self
@@ -147,6 +155,7 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         displayMenu.controlSize = .small
         displayMenu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         displayMenu.isHidden = true
+        displayMenu.toolTip = "Which of the other computer's displays to show"
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         fullScreen.bezelStyle = .accessoryBarAction
@@ -352,7 +361,19 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
         if !sized {
             sizeWindow(to: format)
             onPictureMoved?() // the picture now exists (and has its size)
+            showFirstTip()
         }
+    }
+
+    /// Once ever, on the first picture: how to take control and give it back.
+    private func showFirstTip() {
+        guard !Settings.viewerTipShown else { return }
+        Settings.viewerTipShown = true
+        let enter = Settings.viewerHoverControl ? "Move the pointer into the picture" : "Click into the picture"
+        view.showTip("""
+            \(enter) to control the other computer. To come back, push the pointer out past the \
+            picture's edge or press \(Settings.hotkey.display). Drop files here to send them.
+            """)
     }
 
     /// First frame: size the window to the stream's aspect ratio, within the screen.
@@ -377,10 +398,11 @@ final class ScreenViewer: NSObject, NSWindowDelegate {
     }
 }
 
-/// Hosts the display layer and a status line, and turns clicks into screen fractions.
+/// Hosts the display layer, a status line and tips, and turns clicks into screen fractions.
 private final class VideoView: NSView {
     let displayLayer = AVSampleBufferDisplayLayer()
     private let label = NSTextField(labelWithString: "")
+    private weak var tip: NSView?
     var onClick: ((CGPoint) -> Void)?
     var onDrop: (([URL]) -> Void)?
     /// Size of the stream, to locate the aspect-fit picture inside the view.
@@ -440,6 +462,46 @@ private final class VideoView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// A bubble at the top of the picture, gone after a while or when clicked.
+    func showTip(_ text: String) {
+        tip?.removeFromSuperview()
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+        label.textColor = .labelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let bubble = NSVisualEffectView()
+        bubble.material = .hudWindow
+        bubble.state = .active
+        bubble.wantsLayer = true
+        bubble.layer?.cornerRadius = 10
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(label)
+        addSubview(bubble)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -10),
+            bubble.centerXAnchor.constraint(equalTo: centerXAnchor),
+            bubble.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            bubble.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+            bubble.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -32),
+        ])
+        tip = bubble
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak bubble] in
+            guard let bubble, bubble === self?.tip else { return }
+            self?.hideTip()
+        }
+    }
+
+    private func hideTip() {
+        guard let tip else { return }
+        self.tip = nil
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.3; tip.animator().alphaValue = 0 } completionHandler: {
+            tip.removeFromSuperview()
+        }
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin()
@@ -460,6 +522,7 @@ private final class VideoView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        hideTip() // read, or in the way
         let video = videoRect
         guard video.width > 0, video.height > 0 else { return }
         let p = convert(event.locationInWindow, from: nil)

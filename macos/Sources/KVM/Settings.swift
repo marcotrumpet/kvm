@@ -100,6 +100,12 @@ enum Settings {
         set { defaults.set(newValue, forKey: "viewerResizesHost") }
     }
 
+    /// The screen viewer's how-to-control tip was shown.
+    static var viewerTipShown: Bool {
+        get { defaults.bool(forKey: "viewerTipShown") }
+        set { defaults.set(newValue, forKey: "viewerTipShown") }
+    }
+
     /// Take control of the peer when the pointer enters its picture in the screen viewer.
     static var viewerHoverControl: Bool {
         get { defaults.object(forKey: "viewerHoverControl") as? Bool ?? true }

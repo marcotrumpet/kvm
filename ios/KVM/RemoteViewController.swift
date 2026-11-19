@@ -44,6 +44,9 @@ final class RemoteViewController: UIViewController {
     private var fitHost = Prefs.fitHost
     private var mode = Prefs.touchMode
     private var barCollapsed = false
+    /// Tips waiting to be shown, one after another, and the one on screen.
+    private var tipQueue: [Tip] = []
+    private weak var tipBubble: UIView?
 
     // Gestures
     private var last: (point: CGPoint, time: CFTimeInterval)?
@@ -156,6 +159,7 @@ final class RemoteViewController: UIViewController {
         let height = docked ? max(view.bounds.maxY - frame.minY, 0) : 0
         guard height != keyboardHeight else { return }
         keyboardHeight = height
+        if height > 0, keyboard.isFirstResponder { showTip(.keyboard) }
         let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
         view.setNeedsLayout()
         UIView.animate(withDuration: duration) { self.view.layoutIfNeeded() }
@@ -169,6 +173,8 @@ final class RemoteViewController: UIViewController {
         startMice()
         if screenOn { startVideo() }
         updateStatus()
+        showTip(mode == .touch ? .touch : .trackpad)
+        showTip(.bar)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -280,6 +286,7 @@ final class RemoteViewController: UIViewController {
             let size = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
             // Another display or shape, not just a sharper stream: start from the whole picture.
             let old = videoView.videoSize
+            if old.height == 0 { showTip(.screen) }
             if old.height == 0 || abs(size.width / size.height - old.width / old.height) > 0.01 {
                 let wasZoomed = streamZoom != 1
                 resetZoom()
@@ -320,7 +327,9 @@ final class RemoteViewController: UIViewController {
             mode = mode == .touch ? .trackpad : .touch
             Prefs.touchMode = mode
             modeButton?.configuration?.image = UIImage(systemName: mode == .touch ? "hand.point.up.left" : "rectangle.and.hand.point.up.left")
-            showHint(mode == .touch ? "Touch: tap where you want to click" : "Trackpad: drag to move the pointer")
+            if !showTip(mode == .touch ? .touch : .trackpad) {
+                showHint(mode == .touch ? "Touch: tap where you want to click" : "Trackpad: drag to move the pointer")
+            }
         }, for: .primaryActionTriggered)
         let screen = button(screenOn ? "display" : "rectangle.dashed", "Show screen") {}
         screen.addAction(UIAction { [weak self, weak screen] _ in
@@ -376,14 +385,21 @@ final class RemoteViewController: UIViewController {
             ("App Exposé", "rectangle.stack", { [weak self] in self?.appExpose() }),
             ("Next Space", "arrow.right.square", { [weak self] in self?.switchSpace(left: false) }),
         ]
+        let tips = UIMenu(title: "Tips", image: UIImage(systemName: "lightbulb"), children: Tip.allCases.map { tip in
+            UIAction(title: tip.title) { [weak self] _ in self?.showTip(tip, again: true) }
+        })
         var macButtons: [UIView]
         if traitCollection.userInterfaceIdiom == .pad {
             macButtons = actions.map { button($0.symbol, $0.title, action: $0.run) }
-        } else { // narrow: one menu
-            let menu = button("square.grid.2x2", "Mac actions") {}
+            let help = button("lightbulb", "Tips") {}
+            help.menu = tips
+            help.showsMenuAsPrimaryAction = true
+            macButtons.append(help)
+        } else { // narrow: one menu, tips included
+            let menu = button("square.grid.2x2", "Mac actions and tips") {}
             menu.menu = UIMenu(children: actions.map { a in
                 UIAction(title: a.title, image: UIImage(systemName: a.symbol)) { _ in a.run() }
-            })
+            } + [tips])
             menu.showsMenuAsPrimaryAction = true
             macButtons = [menu]
         }
@@ -415,6 +431,7 @@ final class RemoteViewController: UIViewController {
     private func updateDisplayMenu() {
         let list = model.displays
         displayButton.isHidden = barCollapsed || !screenOn || list.count < 2
+        if screenOn, list.count > 1 { showTip(.displays) }
         displayButton.menu = UIMenu(title: "Display", children: list.map { d in
             let selected = model.selectedDisplay == 0 ? d.main : d.id == model.selectedDisplay
             return UIAction(title: d.name + (d.main ? " (main)" : ""), state: selected ? .on : .off) { [weak self] _ in
@@ -440,6 +457,70 @@ final class RemoteViewController: UIViewController {
             hint.heightAnchor.constraint(equalToConstant: 34),
         ])
         UIView.animate(withDuration: 0.3, delay: 1.8, options: []) { hint.alpha = 0 } completion: { _ in hint.removeFromSuperview() }
+    }
+
+    // MARK: Tips
+
+    /// Shows `tip` the first time it applies (`again`: when asked for from the Tips menu),
+    /// after any tip already showing. Returns whether it will show.
+    @discardableResult
+    private func showTip(_ tip: Tip, again: Bool = false) -> Bool {
+        guard again || !Prefs.tipsShown.contains(tip.rawValue), !tipQueue.contains(tip) else { return false }
+        Prefs.tipsShown.insert(tip.rawValue)
+        tipQueue.append(tip)
+        if tipBubble == nil { showNextTip() }
+        return true
+    }
+
+    /// A bubble with the next tip, above the keyboard; tapping it or a few seconds put it away.
+    private func showNextTip() {
+        guard !tipQueue.isEmpty else { return }
+        let tip = tipQueue.removeFirst()
+        var config = UIButton.Configuration.filled()
+        config.title = tip.title
+        config.subtitle = tip.text
+        config.titleAlignment = .leading
+        config.baseBackgroundColor = UIColor(white: 0.15, alpha: 0.95)
+        config.baseForegroundColor = .white
+        config.cornerStyle = .large
+        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var a = $0
+            a.font = .preferredFont(forTextStyle: .headline)
+            return a
+        }
+        config.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var a = $0
+            a.font = .preferredFont(forTextStyle: .subheadline)
+            return a
+        }
+        let bubble = UIButton(configuration: config)
+        bubble.accessibilityHint = "Dismisses the tip"
+        bubble.alpha = 0
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bubble)
+        let bottom = max(keyboardHeight, view.safeAreaInsets.bottom) + 16
+        NSLayoutConstraint.activate([
+            bubble.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            bubble.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -bottom),
+            bubble.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+            bubble.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -32),
+        ])
+        tipBubble = bubble
+        var dismissed = false
+        let dismiss = { [weak self, weak bubble] in
+            guard !dismissed, let bubble else { return }
+            dismissed = true
+            UIView.animate(withDuration: 0.25) { bubble.alpha = 0 } completion: { _ in
+                bubble.removeFromSuperview()
+                self?.showNextTip()
+            }
+        }
+        bubble.addAction(UIAction { _ in dismiss() }, for: .primaryActionTriggered)
+        UIView.animate(withDuration: 0.25) { bubble.alpha = 1 }
+        // Long enough to read: about three words a second, at least five seconds.
+        let words = (tip.title + " " + tip.text).split(separator: " ").count
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(5, Double(words) / 3), execute: dismiss)
     }
 
     private func toggleKeyboard() {
@@ -942,8 +1023,50 @@ private extension UIStackView {
 }
 
 /// Per-device preferences.
+/// What a first-time user needs to know, shown once each as it becomes relevant, and from
+/// the Tips menu any time.
+enum Tip: String, CaseIterable {
+    case trackpad, touch, screen, displays, keyboard, bar
+
+    var title: String {
+        switch self {
+        case .trackpad: "Trackpad mode"
+        case .touch: "Touch mode"
+        case .screen: "Zoom and gestures"
+        case .displays: "Several displays"
+        case .keyboard: "Shortcuts"
+        case .bar: "Controls"
+        }
+    }
+
+    var text: String {
+        switch self {
+        case .trackpad:
+            "Drag to move the pointer and tap to click. Tap with two fingers to right-click, drag with two to scroll. To drag something, touch and hold, then move."
+        case .touch:
+            "Tap where you want to click and drag to drag. Touch and hold to right-click, drag with two fingers to scroll."
+        case .screen where UIDevice.current.userInterfaceIdiom == .pad: // iPadOS keeps three fingers
+            "Pinch to zoom in on the picture; zoomed in, drag with two fingers to look around. Mission Control, App Exposé and Spaces are buttons up here."
+        case .screen:
+            "Pinch to zoom in on the picture; zoomed in, drag with two fingers to look around. Swipe three fingers up for Mission Control, down for App Exposé, sideways to switch Spaces."
+        case .displays:
+            "Push the pointer past the left or right edge of the picture to go to the next display, or pick one with the display button."
+        case .keyboard:
+            "The bar above the keys has esc, tab and arrows. For a shortcut like ⌘C, tap ⌘, then C."
+        case .bar:
+            "The buttons up here switch between trackpad and touch, show the screen, fit the computer's resolution to this screen and send your clipboard. You can find these tips again under Tips."
+        }
+    }
+}
+
 enum Prefs {
     private static let defaults = UserDefaults.standard
+
+    /// Tips already shown (`Tip` raw values).
+    static var tipsShown: Set<String> {
+        get { Set(defaults.stringArray(forKey: "tipsShown") ?? []) }
+        set { defaults.set(Array(newValue), forKey: "tipsShown") }
+    }
 
     static var screenOn: Bool {
         get { defaults.object(forKey: "screenOn") as? Bool ?? true }
