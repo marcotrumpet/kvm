@@ -18,6 +18,10 @@ on:
         description: "Publish the GitHub release (off: build and sign only, kept as a workflow artifact)"
         type: boolean
         default: true
+      trace:
+        description: "Print each command the scripts run (to debug a failing release)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -68,6 +72,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ inputs.notes }}
           PUBLISH: ${{ inputs.publish && '1' || '0' }}
+          TRACE: ${{ inputs.trace && '1' || '0' }}
         run: |
           [ -n "$SPARKLE_PRIVATE_KEY" ] || { echo "::error::SPARKLE_PRIVATE_KEY secret missing"; exit 1; }
           macos/release.sh "$NOTES"

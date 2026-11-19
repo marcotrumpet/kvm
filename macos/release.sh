@@ -7,6 +7,7 @@
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
 set -euo pipefail
 trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
+[ "${TRACE:-0}" = 1 ] && set -x # TRACE=1: print each command
 
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
@@ -48,11 +49,13 @@ VERSION="$VERSION" ALLOW_UNNOTARIZED=1 ./build.sh
 
 echo "==> Appcast"
 # Prints: sparkle:edSignature="..." length="..."
+{ set +x; } 2>/dev/null # never trace the key
 if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
     SIGNATURE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_DIR/bin/sign_update" --ed-key-file - "$DIST/KVM-macos.zip")"
 else
     SIGNATURE="$("$SPARKLE_DIR/bin/sign_update" "$DIST/KVM-macos.zip")"
 fi
+[ "${TRACE:-0}" = 1 ] && set -x
 VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$SIGNATURE" \
 URL="https://github.com/$REPO/releases/download/$TAG/KVM-macos.zip" python3 - > "$DIST/appcast.xml" <<'EOF'
 import email.utils, html, os
