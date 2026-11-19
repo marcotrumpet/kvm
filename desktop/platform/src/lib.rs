@@ -1,4 +1,4 @@
-//! The OS layer of the Windows (and, later, Linux) app, kept free of the core so it can be
+//! The OS layer of the Windows and Linux (X11) app, kept free of the core so it can be
 //! checked for every target from any machine. The app (`kvm-desktop`) implements
 //! [`Delegate`] and drives [`Injector`], [`ui`] and [`clipboard`].
 
@@ -91,7 +91,12 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{Injector, capture, clipboard, dialog, ui, updater};
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{Injector, capture, clipboard, dialog, ui, updater};
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod unsupported;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub use unsupported::{Injector, capture, clipboard, dialog, ui, updater};

@@ -21,3 +21,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.7", default-features = false }
+ksni = { version = "0.3", features = ["blocking"] }
+x11rb = { version = "0.13", features = ["xtest"] }

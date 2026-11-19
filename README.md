@@ -1,8 +1,8 @@
 # KVM
 
 Share one mouse and keyboard between two computers, peer to peer, on the same network or
-over the internet. A menu bar app on macOS, a tray app on Windows (mouse, keyboard and
-clipboard so far), plus an iPhone and iPad app that controls a Mac; Linux is planned.
+over the internet. A menu bar app on macOS, a tray app on Windows and Linux (mouse, keyboard
+and clipboard so far), plus an iPhone and iPad app that controls a Mac.
 
 - **Switching**: a global shortcut, or hovering over the other computer's screen in the viewer.
 - **Direct connections** via [iroh](https://github.com/n0-computer/iroh) (QUIC, hole punching,
@@ -33,9 +33,9 @@ clipboard so far), plus an iPhone and iPad app that controls a Mac; Linux is pla
 | `macos/` | Swift menu bar app: capture, injection, UI, screen capture and display. |
 | `macos/Microphone/` | "KVM Microphone" Core Audio driver (C): a hidden output device looped into an input for call apps. |
 | `ios/` | iPhone/iPad remote control (Xcode project); shares `Core.swift` and `VideoFrames.swift` with `macos/`. |
-| `desktop/app/` | Windows (later Linux) tray app in Rust, straight on the core: pairing, control, clipboard. |
-| `desktop/platform/` | Its OS layer (input hooks and injection, tray, clipboard, WinSparkle), kept free of the core so `cargo check --target x86_64-pc-windows-msvc -p kvm-platform` works anywhere. |
-| `desktop/windows/` | Inno Setup installer script. |
+| `desktop/app/` | Windows and Linux tray app in Rust, straight on the core: pairing, control, clipboard. |
+| `desktop/platform/` | Its OS layer (Windows: hooks, SendInput, WinSparkle; Linux: X11 grabs, XTest, StatusNotifierItem tray), kept free of the core so `cargo check -p kvm-platform --target x86_64-pc-windows-msvc` (or `x86_64-unknown-linux-gnu`) works anywhere. |
+| `desktop/windows/`, `desktop/linux/` | Inno Setup installer script; Linux install script and desktop entry. |
 | `vendor/` | `netdev` and `netwatch` patched to build for iOS (see the root `Cargo.toml`). |
 | `docs/protocol.md` | Wire protocol. |
 
@@ -78,7 +78,7 @@ displays, pushing the pointer past the left or right edge of the one shown switc
 next. An iPad trackpad or mouse moves the Mac's pointer directly (raw deltas when iPadOS
 locks the pointer to the app, otherwise the iPad pointer points at the picture).
 
-## Windows
+## Windows and Linux
 
 A tray app that pairs with a Mac as its other computer: share mouse and keyboard both ways
 (Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard (text). The Mac's Command
@@ -90,9 +90,16 @@ To pair: open KVM Settings on the Mac, then on Windows choose the Mac under Pair
 the tray menu (or Allow Pairing on Windows and pair from the Mac), and check the code.
 Pairing replaces the Mac's current other computer.
 
-The installer (per user, no admin) and updates (WinSparkle, from the same GitHub releases and
-key as the Mac app) come from the release workflow. Locally: `cargo run -p kvm-desktop` on
-Windows.
+Windows: the installer (per user, no admin) and updates (WinSparkle, from the same GitHub
+releases and key as the Mac app) come from the release workflow.
+
+Linux: X11 sessions only for now (Wayland has no global input capture or injection without
+libei and portals). Unpack `KVM-linux-x86_64.tar.gz` and run `./install.sh` (installs to
+`~/.local/bin`, adds a menu entry and starts it at sign-in). The tray needs a
+StatusNotifierItem host (KDE, Xfce, GNOME with the AppIndicator extension); dialogs use
+zenity or kdialog. It checks daily for a new release and offers the download page.
+
+Locally: `cargo run -p kvm-desktop`.
 
 ## Testing without the app
 

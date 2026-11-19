@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KVM
+Comment=Share mouse, keyboard and clipboard with a Mac
+Exec=kvm
+Icon=input-keyboard
+Categories=Utility;
+X-GNOME-Autostart-enabled=true

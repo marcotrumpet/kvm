@@ -1,5 +1,6 @@
 # Builds, signs and publishes a release that installed copies update to: the Mac app
-# (Sparkle) and the Windows app (WinSparkle), from the same signing key.
+# (Sparkle), the Windows app (WinSparkle) and the Linux app (it checks appcast-linux.xml),
+# from the same signing key.
 # Bump VERSION in macos/build.sh and push, then: Actions > Release > Run workflow, or
 #   gh workflow run release.yml -f notes="one item per line"
 #
@@ -62,8 +63,28 @@ jobs:
           name: windows
           path: dist/KVM-windows-setup.exe
 
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: echo "KVM_VERSION=$(sed -n 's/^VERSION="\${VERSION:-\(.*\)}"$/\1/p' macos/build.sh)" >> "$GITHUB_ENV"
+
+      - name: Build and package
+        run: |
+          cargo build --release -p kvm-desktop
+          mkdir -p dist package/kvm
+          cp target/release/kvm desktop/linux/kvm.desktop desktop/linux/install.sh package/kvm/
+          tar -czf dist/KVM-linux-x86_64.tar.gz -C package kvm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/KVM-linux-x86_64.tar.gz
+
   mac:
-    needs: windows
+    needs: [windows, linux]
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +126,11 @@ jobs:
           name: windows
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: dist
+
       - name: Build, sign, release
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -126,3 +152,5 @@ jobs:
             dist/appcast.xml
             dist/KVM-windows-setup.exe
             dist/appcast-windows.xml
+            dist/KVM-linux-x86_64.tar.gz
+            dist/appcast-linux.xml

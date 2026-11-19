@@ -5,8 +5,8 @@
 #   macos/release.sh ["notes, one item per line"]    (default: commit subjects since the last release)
 # Normally run by .github/workflows/release.yml, with the key from the SPARKLE_PRIVATE_KEY
 # secret; run here, it uses the key in the login keychain. PUBLISH=0: build and sign only.
-# With dist/KVM-windows-setup.exe present (the workflow's Windows job), it is signed and
-# released too, with its own feed appcast-windows.xml (WinSparkle).
+# With dist/KVM-windows-setup.exe or dist/KVM-linux-x86_64.tar.gz present (the workflow's
+# Windows and Linux jobs), they are signed and released too, each with its own feed.
 set -euo pipefail
 trap 'echo "error: $(basename "$0") line $LINENO: $BASH_COMMAND" >&2' ERR
 [ "${TRACE:-0}" = 1 ] && set -x # TRACE=1: print each command
@@ -61,55 +61,40 @@ sign() {
     [ "${TRACE:-0}" = 1 ] && set -x
     return 0
 }
-SIGNATURE="$(sign "$DIST/KVM-macos.zip")"
-VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$SIGNATURE" \
-URL="https://github.com/$REPO/releases/download/$TAG/KVM-macos.zip" python3 - > "$DIST/appcast.xml" <<'EOF'
+# feed <file> <title> <archive> [enclosure attributes] [item elements]: a one-item appcast
+# for <archive>, published next to it.
+feed() {
+    TITLE="$2" VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$(sign "$DIST/$3")" ATTRS="${4:-}" EXTRA="${5:-}" \
+    URL="https://github.com/$REPO/releases/download/$TAG/$3" python3 - > "$DIST/$1" <<'FEED'
 import email.utils, html, os
 items = "".join(f"<li>{html.escape(l.lstrip('- '))}</li>" for l in os.environ["NOTES"].splitlines() if l.strip())
 v = os.environ["VERSION"]
 print(f"""<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>KVM</title>
+    <title>{os.environ['TITLE']}</title>
     <item>
       <title>KVM {v}</title>
       <pubDate>{email.utils.formatdate()}</pubDate>
       <sparkle:version>{v}</sparkle:version>
-      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>{os.environ['EXTRA']}
       <description><![CDATA[<ul>{items}</ul>]]></description>
-      <enclosure url="{os.environ['URL']}" type="application/octet-stream" {os.environ['SIGNATURE']}/>
+      <enclosure url="{os.environ['URL']}" {os.environ['ATTRS']} type="application/octet-stream" {os.environ['SIGNATURE']}/>
     </item>
   </channel>
 </rss>""")
-EOF
+FEED
+    ASSETS+=("$DIST/$3" "$DIST/$1")
+}
 
-ASSETS=("$DIST/KVM-macos.zip" "$DIST/appcast.xml")
-WINDOWS="$DIST/KVM-windows-setup.exe"
-if [ -f "$WINDOWS" ]; then
-    echo "==> Windows appcast"
-    VERSION="$VERSION" NOTES="$NOTES" SIGNATURE="$(sign "$WINDOWS")" \
-    URL="https://github.com/$REPO/releases/download/$TAG/KVM-windows-setup.exe" python3 - > "$DIST/appcast-windows.xml" <<'WINDOWS_FEED'
-import email.utils, html, os
-items = "".join(f"<li>{html.escape(l.lstrip('- '))}</li>" for l in os.environ["NOTES"].splitlines() if l.strip())
-v = os.environ["VERSION"]
-print(f"""<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>KVM for Windows</title>
-    <item>
-      <title>KVM {v}</title>
-      <pubDate>{email.utils.formatdate()}</pubDate>
-      <sparkle:version>{v}</sparkle:version>
-      <sparkle:shortVersionString>{v}</sparkle:shortVersionString>
-      <description><![CDATA[<ul>{items}</ul>]]></description>
-      <enclosure url="{os.environ['URL']}" sparkle:os="windows" sparkle:installerArguments="/SILENT /SP- /NOCANCEL"
-                 type="application/octet-stream" {os.environ['SIGNATURE']}/>
-    </item>
-  </channel>
-</rss>""")
-WINDOWS_FEED
-    ASSETS+=("$WINDOWS" "$DIST/appcast-windows.xml")
+ASSETS=()
+feed appcast.xml "KVM" KVM-macos.zip "" $'\n      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>'
+if [ -f "$DIST/KVM-windows-setup.exe" ]; then
+    feed appcast-windows.xml "KVM for Windows" KVM-windows-setup.exe \
+        'sparkle:os="windows" sparkle:installerArguments="/SILENT /SP- /NOCANCEL"'
+fi
+if [ -f "$DIST/KVM-linux-x86_64.tar.gz" ]; then
+    feed appcast-linux.xml "KVM for Linux" KVM-linux-x86_64.tar.gz 'sparkle:os="linux"'
 fi
 
 if [ "${PUBLISH:-1}" != 1 ]; then

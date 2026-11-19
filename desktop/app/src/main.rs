@@ -1,4 +1,4 @@
-//! KVM for Windows (and, later, Linux): a tray app that shares mouse, keyboard and
+//! KVM for Windows and Linux (X11): a tray app that shares mouse, keyboard and
 //! clipboard with a paired Mac. The core runs on a tokio runtime; the main thread runs the
 //! OS's UI loop and input hooks (kvm-platform).
 
@@ -15,7 +15,11 @@ use kvm_core::Node;
 use kvm_platform::{dialog, ui, updater};
 
 /// Updates: the same GitHub releases and signing key as the Mac app (see macos/release.sh).
-const FEED_URL: &str = "https://github.com/marcotrumpet/kvm/releases/latest/download/appcast-windows.xml";
+const FEED_URL: &str = if cfg!(windows) {
+    "https://github.com/marcotrumpet/kvm/releases/latest/download/appcast-windows.xml"
+} else {
+    "https://github.com/marcotrumpet/kvm/releases/latest/download/appcast-linux.xml"
+};
 const UPDATE_PUBLIC_KEY: &str = "uTJI1jCYearLasko0mLDJI9aF2fec64AWr13pneHktA=";
 const VERSION: &str = match option_env!("KVM_VERSION") {
     Some(v) => v,

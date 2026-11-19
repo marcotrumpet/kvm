@@ -2,7 +2,7 @@
 name = "kvm-desktop"
 version = "0.1.0" # the released version comes from KVM_VERSION (macos/build.sh's VERSION)
 edition = "2024"
-description = "KVM for Windows (and, later, Linux): share mouse, keyboard and clipboard with a Mac."
+description = "KVM for Windows and Linux (X11): share mouse, keyboard and clipboard with a Mac."
 
 [[bin]]
 name = "kvm"

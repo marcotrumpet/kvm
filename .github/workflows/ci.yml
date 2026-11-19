@@ -1,4 +1,4 @@
-# Builds and tests the Windows app on every push that touches it (the Mac and iOS apps are
+# Builds and tests the Windows and Linux app on every push that touches it (the Mac and iOS apps are
 # built locally and by the release workflow).
 name: CI
 
@@ -11,6 +11,13 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test -p kvm-platform -p kvm-desktop
+      - run: cargo build -p kvm-desktop
+
+  linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: cargo test -p kvm-platform -p kvm-desktop
