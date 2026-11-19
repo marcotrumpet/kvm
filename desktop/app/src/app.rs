@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use kvm_core::{EndpointId, Event, Link, Node, NodeEvent};
-use kvm_platform::{Delegate, Injector, Input, MenuEntry, capture, dialog, ui, updater};
+use kvm_platform::screen::ScreenHost;
+use kvm_platform::video::{ScreenParams, display_list_json};
+use kvm_platform::{Delegate, Injector, Input, MenuEntry, capture, dialog, screen, ui, updater};
 use tokio::runtime::Handle;
 use tracing::{info, warn};
 
@@ -37,6 +39,8 @@ pub struct App {
     link: Mutex<Option<Arc<Link>>>,
     /// Sessions from paired remote controls, while there are any.
     remotes: Mutex<Option<Arc<Link>>>,
+    /// This screen, shared with a viewer: the paired computer's (false) or a remote's (true).
+    screen: Mutex<Option<(ScreenHost, bool)>>,
     state: Mutex<State>,
     injector: Injector,
     /// Clipboard text received from the peer, to set on the clipboard thread.
@@ -82,6 +86,7 @@ impl App {
             config: Mutex::new(config),
             link: Mutex::new(None),
             remotes: Mutex::new(None),
+            screen: Mutex::new(None),
             injector: Injector::default(),
             clipboard_in,
             clipboard_rx: Mutex::new(Some(clipboard_rx)),
@@ -170,6 +175,9 @@ impl App {
 
     /// A remote control's session: it only ever controls this computer.
     fn remote_event(&self, event: Event) {
+        if self.screen_event(&event, true) {
+            return;
+        }
         let controlling = || self.state.lock().unwrap().remote_controlling.is_some();
         match event {
             Event::Connected { peer, name } => {
@@ -189,7 +197,11 @@ impl App {
                 self.injector.begin();
                 self.refresh();
             }
-            Event::Left | Event::Stalled | Event::Disconnected { .. } | Event::TakenBack => self.release_remote(),
+            Event::Left => self.release_remote(),
+            Event::Stalled | Event::Disconnected { .. } | Event::TakenBack => {
+                self.release_remote();
+                self.stop_screen(true);
+            }
             Event::Move { dx, dy } if controlling() => self.injector.motion(dx, dy),
             Event::Scroll { dx, dy } if controlling() => self.injector.scroll(dx, dy),
             Event::Wheel { dx, dy } if controlling() => self.injector.wheel(dx, dy),
@@ -197,13 +209,13 @@ impl App {
             Event::Button { button, down } if controlling() => self.injector.button(button, down),
             Event::Consumer { usage, down } if controlling() => self.injector.consumer(usage, down),
             Event::Text(text) if controlling() => self.injector.text(&text),
-            Event::PointerAbs { x, y, .. } if controlling() => self.injector.warp(x, y),
+            Event::PointerAbs { x, y, display } if controlling() => self.injector.warp(x, y, display),
             Event::Clipboard(payload) => {
                 if let Some(text) = clipboard::decode_text(&payload) {
                     let _ = self.clipboard_in.send(text);
                 }
             }
-            _ => {} // no screen to show yet
+            _ => {}
         }
     }
 
@@ -216,6 +228,82 @@ impl App {
 
     fn link(&self) -> Option<Arc<Link>> {
         self.link.lock().unwrap().clone()
+    }
+
+    // MARK: Sharing this screen
+
+    /// A viewer's request on the paired computer's link (`remote` false) or a remote
+    /// control's. Returns false for events that aren't about the screen.
+    fn screen_event(&self, event: &Event, remote: bool) -> bool {
+        match event {
+            Event::VideoRequested(p) => {
+                let link = if remote { self.remotes.lock().unwrap().clone() } else { self.link() };
+                let Some(link) = link else { return true };
+                if !screen::supported() {
+                    warn!("the peer asked to view this screen: not supported here yet");
+                    return true;
+                }
+                let params = ScreenParams {
+                    max_width: p.max_width,
+                    max_height: p.max_height,
+                    fps: p.fps,
+                    bitrate_kbps: p.bitrate_kbps,
+                    display: p.display,
+                };
+                {
+                    let _rt = self.rt.enter();
+                    link.send_display_list(display_list_json(&screen::displays()));
+                }
+                let mut current = self.screen.lock().unwrap();
+                match current.as_ref() {
+                    Some((host, owner)) if *owner == remote => host.update(params),
+                    _ => {
+                        let rt = self.rt.clone();
+                        let sink = Box::new(move |payload: Vec<u8>, keyframe: bool| {
+                            let _rt = rt.enter();
+                            link.send_video_frame(payload, keyframe)
+                        });
+                        *current = None; // stop another viewer's share first
+                        *current = Some((ScreenHost::start(params, sink), remote));
+                        info!("sharing this screen");
+                    }
+                }
+                drop(current);
+                self.refresh();
+            }
+            Event::VideoStopped => self.stop_screen(remote),
+            Event::KeyframeRequested => {
+                if let Some((host, owner)) = self.screen.lock().unwrap().as_ref()
+                    && *owner == remote
+                {
+                    host.request_keyframe();
+                }
+            }
+            Event::VideoBitrate(kbps) => {
+                if let Some((host, owner)) = self.screen.lock().unwrap().as_ref()
+                    && *owner == remote
+                {
+                    host.set_bitrate(*kbps);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn stop_screen(&self, remote: bool) {
+        let stopped = {
+            let mut current = self.screen.lock().unwrap();
+            if current.as_ref().is_some_and(|(_, owner)| *owner == remote) { current.take() } else { None }
+        };
+        if stopped.is_some() {
+            drop(stopped); // joins the capture thread, outside the lock
+            self.refresh();
+        }
+    }
+
+    fn sharing(&self) -> bool {
+        self.screen.lock().unwrap().is_some()
     }
 
     fn mode(&self) -> Mode {
@@ -299,6 +387,9 @@ impl App {
     // MARK: Core events
 
     fn event(&self, event: Event) {
+        if self.screen_event(&event, false) {
+            return;
+        }
         let controlled = || self.mode() == Mode::Controlled;
         match event {
             Event::Connected { name, .. } => {
@@ -321,6 +412,7 @@ impl App {
                 info!("disconnected: {reason}");
                 self.return_to_local(false);
                 self.release_control();
+                self.stop_screen(false);
                 {
                     let mut s = self.state.lock().unwrap();
                     s.connected = false;
@@ -331,6 +423,7 @@ impl App {
             Event::Stalled => {
                 self.return_to_local(false);
                 self.release_control();
+                self.stop_screen(false);
                 self.state.lock().unwrap().stalled = true;
                 self.refresh();
             }
@@ -365,7 +458,7 @@ impl App {
             Event::Button { button, down } if controlled() => self.injector.button(button, down),
             Event::Consumer { usage, down } if controlled() => self.injector.consumer(usage, down),
             Event::Text(text) if controlled() => self.injector.text(&text),
-            Event::PointerAbs { x, y, .. } if controlled() => self.injector.warp(x, y),
+            Event::PointerAbs { x, y, display } if controlled() => self.injector.warp(x, y, display),
             Event::Clipboard(payload) => {
                 if self.config.lock().unwrap().share_clipboard
                     && let Some(text) = clipboard::decode_text(&payload)
@@ -396,7 +489,6 @@ impl App {
             Event::FileSendDone { error: Some(error), .. } => {
                 std::thread::spawn(move || dialog::tell("KVM", &format!("Sending failed: {error}")));
             }
-            Event::VideoRequested(_) => warn!("the peer asked to view this screen: not supported here yet"),
             _ => {}
         }
     }
@@ -550,22 +642,26 @@ impl App {
     // MARK: Tray
 
     fn status(&self) -> String {
-        if self.peer_id().is_none() {
+        if self.peer_id().is_none() && self.config.lock().unwrap().remotes.is_empty() {
             return "KVM: not paired".into();
         }
+        let sharing = if self.sharing() { ", sharing this screen" } else { "" };
         let s = self.state.lock().unwrap();
         if let Some(remote) = &s.remote_controlling {
-            return format!("KVM: {remote} is controlling this computer");
+            return format!("KVM: {remote} is controlling this computer{sharing}");
+        }
+        if self.peer_id().is_none() {
+            return format!("KVM: ready for your iPhone or iPad{sharing}");
         }
         let peer = s.peer_name.clone().unwrap_or_else(|| "the other computer".into());
         match (s.connected, s.stalled, s.mode) {
             (false, _, _) => format!("KVM: connecting to {peer}…"),
             (true, true, _) => format!("KVM: connection to {peer} lost, waiting…"),
             (true, false, Mode::Controlling) => format!("KVM: controlling {peer}"),
-            (true, false, Mode::Controlled) => format!("KVM: {peer} is controlling this computer"),
+            (true, false, Mode::Controlled) => format!("KVM: {peer} is controlling this computer{sharing}"),
             (true, false, Mode::Local) => match s.latency_ms {
-                Some(ms) => format!("KVM: connected to {peer} ({ms:.0} ms)"),
-                None => format!("KVM: connected to {peer}"),
+                Some(ms) => format!("KVM: connected to {peer} ({ms:.0} ms){sharing}"),
+                None => format!("KVM: connected to {peer}{sharing}"),
             },
         }
     }
@@ -649,6 +745,9 @@ impl App {
             });
         }
         menu.push(MenuEntry::item("received", "Show Received Files"));
+        if self.sharing() {
+            menu.push(MenuEntry::item("stop-sharing", "Stop Sharing This Screen"));
+        }
         menu.push(MenuEntry::check("clipboard", "Share Clipboard", config.share_clipboard));
         menu.push(MenuEntry::check("swap", "Mac's Command Key Is Ctrl", config.swap_ctrl_cmd));
         menu.push(MenuEntry::check("lock", "Lock Both Screens Together", config.lock_together));
@@ -666,6 +765,7 @@ impl App {
         self.return_to_local(true);
         self.release_control();
         self.release_remote();
+        self.screen.lock().unwrap().take();
         updater::stop();
     }
 }
@@ -736,6 +836,11 @@ impl Delegate for App {
                 }
             }
             "received" => open(&crate::config::downloads_dir()),
+            "stop-sharing" => {
+                let stopped = self.screen.lock().unwrap().take();
+                drop(stopped);
+                self.refresh();
+            }
             "copy-id" => {
                 let _ = self.clipboard_in.send(self.node.id().to_string());
             }

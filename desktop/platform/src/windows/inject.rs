@@ -116,10 +116,14 @@ impl Injector {
         send(&[mouse(nx, ny, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK)]);
     }
 
-    /// To a point on the main screen, as fractions 0..=65535 (other displays: the main one).
-    pub fn warp(&self, fx: u16, fy: u16) {
-        let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN) as f64, GetSystemMetrics(SM_CYSCREEN) as f64) };
-        let (x, y) = (fx as f64 / 65535.0 * (w - 1.0), fy as f64 / 65535.0 * (h - 1.0));
+    /// To a point on a display (an id from the display list; 0 the main one), as fractions
+    /// 0..=65535: where the viewer was clicked.
+    pub fn warp(&self, fx: u16, fy: u16, display: u32) {
+        let (left, top, w, h) = match super::screen::display(display) {
+            Some(d) => (d.left as f64, d.top as f64, d.width as f64, d.height as f64),
+            None => unsafe { (0.0, 0.0, GetSystemMetrics(SM_CXSCREEN) as f64, GetSystemMetrics(SM_CYSCREEN) as f64) },
+        };
+        let (x, y) = (left + fx as f64 / 65535.0 * (w - 1.0), top + fy as f64 / 65535.0 * (h - 1.0));
         {
             let mut s = self.state.lock().unwrap();
             s.x = x;

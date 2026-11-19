@@ -147,7 +147,7 @@ impl Injector {
         self.fake(MOTION_NOTIFY, 0, px as i16, py as i16);
     }
 
-    pub fn warp(&self, fx: u16, fy: u16) {
+    pub fn warp(&self, fx: u16, fy: u16, _display: u32) {
         let Some(x) = x() else { return };
         let (px, py) = (fx as f64 / 65535.0 * (x.width as f64 - 1.0), fy as f64 / 65535.0 * (x.height as f64 - 1.0));
         *self.pos.lock().unwrap() = (px, py);

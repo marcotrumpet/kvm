@@ -10,7 +10,7 @@ impl Injector {
     pub fn begin(&self) {}
     pub fn end(&self) {}
     pub fn motion(&self, _dx: i64, _dy: i64) {}
-    pub fn warp(&self, _fx: u16, _fy: u16) {}
+    pub fn warp(&self, _fx: u16, _fy: u16, _display: u32) {}
     pub fn button(&self, _button: u8, _down: bool) {}
     pub fn wheel(&self, _dx: i16, _dy: i16) {}
     pub fn scroll(&self, _dx: i64, _dy: i64) {}
@@ -22,6 +22,33 @@ impl Injector {
 
 pub fn system_proxy() -> Option<String> {
     None
+}
+
+/// Sharing this screen isn't available here yet.
+pub mod screen {
+    pub use crate::video::Display;
+    use crate::video::ScreenParams;
+
+    pub type FrameSink = Box<dyn FnMut(Vec<u8>, bool) -> bool + Send>;
+
+    pub fn supported() -> bool {
+        false
+    }
+
+    pub fn displays() -> Vec<Display> {
+        Vec::new()
+    }
+
+    pub struct ScreenHost;
+
+    impl ScreenHost {
+        pub fn start(_params: ScreenParams, _sink: FrameSink) -> ScreenHost {
+            ScreenHost
+        }
+        pub fn update(&self, _params: ScreenParams) {}
+        pub fn set_bitrate(&self, _kbps: u32) {}
+        pub fn request_keyframe(&self) {}
+    }
 }
 
 pub mod capture {

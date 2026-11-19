@@ -88,17 +88,22 @@ pub trait Delegate: Send + Sync + 'static {
     fn screen_locked(&self) {}
 }
 
+pub mod video;
+
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
+pub use windows::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
 
-#[cfg(not(any(windows, target_os = "linux")))]
+/// Stand-ins: everything on macOS (it has its own app); screen sharing on Linux.
+#[cfg(not(windows))]
 mod unsupported;
+#[cfg(target_os = "linux")]
+pub use unsupported::screen;
 #[cfg(not(any(windows, target_os = "linux")))]
-pub use unsupported::{Injector, capture, clipboard, dialog, system_proxy, ui, updater};
+pub use unsupported::{Injector, capture, clipboard, dialog, screen, system_proxy, ui, updater};
