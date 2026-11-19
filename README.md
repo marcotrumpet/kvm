@@ -1,8 +1,8 @@
 # KVM
 
 Share one mouse and keyboard between two computers, peer to peer, on the same network or
-over the internet. A menu bar app on macOS, a tray app on Windows and Linux (mouse, keyboard
-and clipboard so far), plus an iPhone and iPad app that controls a Mac.
+over the internet. A menu bar app on macOS, a tray app on Windows and Linux (untested on
+real machines so far, see below), plus an iPhone and iPad app that controls a computer.
 
 - **Switching**: a global shortcut, or hovering over the other computer's screen in the viewer.
 - **Direct connections** via [iroh](https://github.com/n0-computer/iroh) (QUIC, hole punching,
@@ -94,6 +94,13 @@ next. An iPad trackpad or mouse moves the Mac's pointer directly (raw deltas whe
 locks the pointer to the app, otherwise the iPad pointer points at the picture).
 
 ## Windows and Linux
+
+> **Untested on real machines.** The author has no Windows PC or Linux desktop, so these
+> apps have never been run by a person. They build, and their tests pass, on GitHub's
+> Windows and Ubuntu machines (CI), the OS layer type-checks against the real Windows and X11
+> APIs, and the screen stream was checked to decode in the Mac viewer, but pairing, input,
+> the clipboard, files and screen sharing have not been tried on a PC. Expect rough edges;
+> reports and logs (tray menu > Show Log) are welcome.
 
 A tray app that pairs with a Mac as its other computer: share mouse and keyboard both ways
 (Ctrl+Alt+K switches, like the Mac's shortcut), and the clipboard (text). The Mac's Command
