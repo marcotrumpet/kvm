@@ -227,6 +227,9 @@ pub mod ui {
     use ksni::blocking::TrayMethods;
 
     static TRAY: Mutex<Option<ksni::blocking::Handle<Tray>>> = Mutex::new(None);
+    /// Updates go to a thread of their own: the blocking handle runs a runtime of its own,
+    /// which panics when called from one of the app's tokio workers.
+    static UPDATES: Mutex<Option<std::sync::mpsc::Sender<Box<dyn FnOnce(&mut Tray) + Send>>>> = Mutex::new(None);
 
     struct Tray {
         delegate: Arc<dyn Delegate>,
@@ -281,17 +284,19 @@ pub mod ui {
         }
     }
 
-    pub fn set_menu(entries: Vec<MenuEntry>) {
-        if let Some(handle) = TRAY.lock().unwrap().as_ref() {
-            handle.update(|t| t.menu = entries);
+    fn update(f: impl FnOnce(&mut Tray) + Send + 'static) {
+        if let Some(updates) = UPDATES.lock().unwrap().as_ref() {
+            let _ = updates.send(Box::new(f));
         }
     }
 
+    pub fn set_menu(entries: Vec<MenuEntry>) {
+        update(|t| t.menu = entries);
+    }
+
     pub fn set_tooltip(text: &str) {
-        if let Some(handle) = TRAY.lock().unwrap().as_ref() {
-            let text = text.to_string();
-            handle.update(|t| t.tooltip = text);
-        }
+        let text = text.to_string();
+        update(|t| t.tooltip = text);
     }
 
     pub fn quit() {
@@ -310,13 +315,24 @@ pub mod ui {
         grab_hotkey(x, &hotkey);
         let tray = Tray { delegate: delegate.clone(), menu: vec![], tooltip: "KVM".into() };
         match tray.spawn() {
-            Ok(handle) => *TRAY.lock().unwrap() = Some(handle),
+            Ok(handle) => {
+                let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce(&mut Tray) + Send>>();
+                let updater = handle.clone();
+                std::thread::spawn(move || {
+                    for f in rx {
+                        updater.update(f);
+                    }
+                });
+                *UPDATES.lock().unwrap() = Some(tx);
+                *TRAY.lock().unwrap() = Some(handle);
+            }
             Err(err) => tracing::warn!("no tray (is a StatusNotifierItem host running?): {err}"),
         }
         while !QUIT.load(Ordering::Acquire) {
             let event = x.conn.wait_for_event()?;
             handle(x, &delegate, event);
         }
+        UPDATES.lock().unwrap().take();
         if let Some(handle) = TRAY.lock().unwrap().take() {
             handle.shutdown().wait();
         }
