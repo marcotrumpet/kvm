@@ -5,7 +5,9 @@ Ed25519 endpoint id; only the paired id is accepted. The side with the smaller i
 
 Remote controls (the iPhone/iPad app) are the exception: they always dial, and a computer
 accepts them on a second link next to the one with its paired peer, from any id in its list
-of paired remote controls, one session at a time. They only ever send input.
+of paired remote controls, one session at a time. They control and view it and may share
+their clipboard; the computer refuses files (stopping the stream with code 1), `Lock` and
+`WakeAddress` from them.
 
 ## Channels
 
@@ -82,8 +84,9 @@ Opaque to the core (max 32 MiB). The apps use: `count: u16 BE`, then per entry
 path, kind (file/dir/symlink), size, mode, mtime, target, offset, total, clipboard }`, one
 stream per entry, folders before their contents; `path` is relative and '/'-separated, its first component the
 item that was sent. Receivers keep permission bits (never setuid/setgid/sticky), modification times, empty
-folders and symbolic links whose target stays inside the sent item; they never write
-through a link. They keep only plain path components, write `.name.kvmpart` and
+folders and symbolic links whose target stays inside the sent item (relative, any `..`
+first, and only inside a sent folder); they never write through a link. A macOS receiver
+quarantines what arrives, like AirDrop, so Gatekeeper checks apps before they first run. They keep only plain path components, write `.name.kvmpart` and
 rename once the size matches, and give clashing top-level items Finder-style names.
 
 Files copied in a file manager travel the same way with `clipboard = true`: the receiver
@@ -166,10 +169,18 @@ display along the edge is used.
 
 ## Pairing
 
-ALPN `kvm-pair/1`, one bi-directional stream: `Pair::Request{name}` or, from a remote control,
-`Pair::RequestRemote{name}`; answered by `Pair::Reply{accepted, name}`. Only machines in
-pairing mode (KVM Settings open) ask their user; others decline. Both show a six-digit code
-derived from the two ids. A remote control is added to the computer's list of remote
+ALPN `kvm-pair/2`, one bi-directional stream: `Pair::Request{name, remote}` (`remote` from a
+remote control), answered at once by `Pair::Challenge{nonce}` (32 random bytes) and, once
+the user decided, `Pair::Reply{accepted, name}`. Only machines in pairing mode (KVM
+Settings in use, Allow Pairing on Windows and Linux) ask their user; others reply
+`Reply{accepted: false}` straight away, without a challenge. Both show a six-digit code:
+BLAKE3 (derive-key context `"kvm pairing code v2"`) over the two ids, smaller first, and the
+nonce; the first 8 bytes as u64 LE, mod 1 000 000. The asker's id is fixed by the
+connection before the nonce is known, so no other machine can pick an id that shows the
+same code. Askers also offer `kvm-pair/1`, the earlier protocol (its code came from the ids
+alone): a machine that picks it has an older KVM, and pairing stops there. Names from the
+network are shown without control characters or text direction overrides, at most 64
+characters. A remote control is added to the computer's list of remote
 controls instead of replacing its paired peer. The Mac's Settings show a QR code with
 `kvm://pair?id=<id>&name=<name>`, which the iOS app (or the Camera) opens to request pairing.
 iOS has no mDNS (it needs a multicast entitlement), so remote controls reach computers by id

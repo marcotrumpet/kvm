@@ -158,27 +158,44 @@ pub const STREAM_FILE: u8 = 2;
 
 /// Pairing runs on its own ALPN so an unpaired machine can be asked to pair without
 /// being let into the input session.
-pub const PAIR_ALPN: &[u8] = b"kvm-pair/1";
+pub const PAIR_ALPN: &[u8] = b"kvm-pair/2";
+/// The previous pairing protocol, whose code came from the ids alone. Only offered when
+/// asking, to tell that the other machine needs a newer KVM; never accepted.
+pub const PAIR_ALPN_V1: &[u8] = b"kvm-pair/1";
 
+/// Pairing: `Request`, then `Challenge` right away, then `Reply` once the user decided.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pair {
-    Request { name: String },
-    Reply { accepted: bool, name: String },
-    /// Like `Request`, from a remote control (phone, tablet): it only ever controls, and is
+    /// `remote`: from a remote control (phone, tablet), which only ever controls and is
     /// trusted in addition to the paired computer instead of replacing it.
-    RequestRemote { name: String },
+    Request { name: String, remote: bool },
+    /// A random value from the machine asked, which both mix into the code they show.
+    Challenge { nonce: [u8; 32] },
+    Reply { accepted: bool, name: String },
 }
 
-/// Six digits both machines show while pairing, derived from both ids (FNV-1a over the
-/// sorted ids), so you can check you picked the right machine. Not a security measure:
-/// the ids themselves are authenticated by the connection.
-pub fn pairing_code(a: &[u8; 32], b: &[u8; 32]) -> String {
+/// Longest machine name kept from a peer, in characters.
+const MAX_NAME_CHARS: usize = 64;
+
+/// A machine name from the network, made safe to show: no control characters (a line
+/// break could add text of its own to a pairing question) or text direction overrides
+/// (which can make it read as another name), trimmed, and not too long.
+pub fn clean_name(name: &str) -> String {
+    let bidi = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    let name: String = name.chars().filter(|&c| !c.is_control() && !bidi(c)).take(MAX_NAME_CHARS).collect();
+    let name = name.trim();
+    if name.is_empty() { "Unnamed".to_string() } else { name.to_string() }
+}
+
+/// Six digits both machines show while pairing, so the user can check that the request
+/// on screen is from the machine in front of them. From both ids and the asked machine's
+/// fresh `nonce`: the asker's id is fixed by the connection before the nonce is known,
+/// so another machine can't search for an id that would show the same digits.
+pub fn pairing_code(a: &[u8; 32], b: &[u8; 32], nonce: &[u8; 32]) -> String {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in lo.iter().chain(hi.iter()) {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
+    let mut hasher = blake3::Hasher::new_derive_key("kvm pairing code v2");
+    hasher.update(lo).update(hi).update(nonce);
+    let hash = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     format!("{:06}", hash % 1_000_000)
 }
 
@@ -204,11 +221,20 @@ mod tests {
 
     #[test]
     fn pairing_code_is_symmetric() {
-        let a = [1u8; 32];
-        let b = [2u8; 32];
-        assert_eq!(pairing_code(&a, &b), pairing_code(&b, &a));
-        assert_eq!(pairing_code(&a, &b).len(), 6);
-        assert_ne!(pairing_code(&a, &b), pairing_code(&a, &[3u8; 32]));
+        let (a, b, nonce) = ([1u8; 32], [2u8; 32], [7u8; 32]);
+        assert_eq!(pairing_code(&a, &b, &nonce), pairing_code(&b, &a, &nonce));
+        assert_eq!(pairing_code(&a, &b, &nonce).len(), 6);
+        assert_ne!(pairing_code(&a, &b, &nonce), pairing_code(&a, &[3u8; 32], &nonce));
+        assert_ne!(pairing_code(&a, &b, &nonce), pairing_code(&a, &b, &[8u8; 32]));
+    }
+
+    #[test]
+    fn names_are_cleaned() {
+        assert_eq!(clean_name("  Marco's Mac\n\nIt is safe to pair. "), "Marco's MacIt is safe to pair.");
+        assert_eq!(clean_name("Mac\u{202e}koob"), "Mackoob");
+        assert_eq!(clean_name("\u{202e}\t"), "Unnamed");
+        assert_eq!(clean_name(&"x".repeat(1000)).len(), MAX_NAME_CHARS);
+        assert_eq!(clean_name(""), "Unnamed");
     }
 
     #[test]

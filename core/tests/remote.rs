@@ -53,6 +53,25 @@ async fn remote_control_connects_and_types() {
     phone_link.send_text("ciao è".into());
     assert_eq!(next(&mut computer_events, |e| matches!(e, Event::Text(_))).await, Event::Text("ciao è".into()));
 
+    // It shares its clipboard, but doesn't lock the computer or send it files.
+    let downloads = std::env::temp_dir().join(format!("kvm-test-downloads-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&downloads);
+    kvm_core::set_download_dir(downloads.clone());
+    let file = std::env::temp_dir().join(format!("kvm-test-sent-{}.txt", std::process::id()));
+    std::fs::write(&file, b"hello").unwrap();
+    phone_link.send_lock();
+    phone_link.send_files(vec![file.clone()], false);
+    phone_link.send_clipboard(b"clip".to_vec());
+    assert_eq!(next(&mut computer_events, |e| matches!(e, Event::Clipboard(_))).await, Event::Clipboard(b"clip".to_vec()));
+    let done = next(&mut phone_events, |e| matches!(e, Event::FileSendDone { .. })).await;
+    assert!(matches!(done, Event::FileSendDone { error: Some(_), .. }), "{done:?}");
+    let mut seen = Vec::new();
+    while let Ok(event) = computer_events.try_recv() {
+        seen.push(event);
+    }
+    assert!(!seen.iter().any(|e| matches!(e, Event::LockRequested | Event::FileReceived { .. })), "{seen:?}");
+    assert!(!downloads.join(file.file_name().unwrap()).exists());
+
     // Someone the computer doesn't trust is refused.
     let stranger = node("stranger").await;
     let (_stranger_link, mut stranger_events) = stranger.dial(computer.id());

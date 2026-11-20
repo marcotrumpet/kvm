@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use iroh::address_lookup::UserData;
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{ConnectOptions, Connection, presets};
 use iroh::{Endpoint, EndpointId, SecretKey};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use n0_future::StreamExt;
@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::protocol::{self, ALPN, PAIR_ALPN, Pair};
+use crate::protocol::{self, ALPN, PAIR_ALPN, PAIR_ALPN_V1, Pair};
 use crate::session::{Event, Session};
 
 const IDENTITY_FILE: &str = "identity.key";
@@ -42,6 +42,8 @@ pub enum NodeEvent {
     /// Someone asks to pair with this machine; answer with [`Node::respond_pairing`].
     /// `remote`: a remote control (phone, tablet), trusted next to the paired computer.
     PairRequest { id: EndpointId, name: String, code: String, remote: bool },
+    /// While our [`Node::request_pairing`] waits: the code `id` shows with the request.
+    PairCode { id: EndpointId, code: String },
     /// The answer to our [`Node::request_pairing`].
     PairResult { id: EndpointId, name: String, accepted: bool, error: Option<String> },
 }
@@ -171,7 +173,8 @@ impl Node {
     fn start_link(&self, target: Target, route: Route) -> (Link, mpsc::UnboundedReceiver<Event>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let current = Arc::new(Mutex::new(None));
-        let task = tokio::spawn(maintain(self.clone(), target, current.clone(), events_tx));
+        let remote = matches!(route, Route::Remotes);
+        let task = tokio::spawn(maintain(self.clone(), target, remote, current.clone(), events_tx));
         (Link { current, task, route, node: self.inner.clone() }, events_rx)
     }
 
@@ -208,23 +211,37 @@ impl Node {
     }
 
     async fn pair_with(&self, peer: EndpointId, remote: bool) -> Result<(bool, String)> {
-        let conn = tokio::time::timeout(CONNECT_TIMEOUT, self.endpoint.connect(peer, PAIR_ALPN))
-            .await
-            .context("connecting timed out")?
-            .context("connecting")?;
+        let conn = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            let options = ConnectOptions::new().with_additional_alpns(vec![PAIR_ALPN_V1.to_vec()]);
+            anyhow::Ok(self.endpoint.connect_with_opts(peer, PAIR_ALPN, options).await?.await?)
+        })
+        .await
+        .context("connecting timed out")?
+        .context("connecting")?;
+        if conn.alpn() == PAIR_ALPN_V1 {
+            conn.close(0u32.into(), b"done");
+            bail!("the other machine has an older KVM: update it, then pair again");
+        }
         let (mut send, mut recv) = conn.open_bi().await.context("opening pairing stream")?;
-        let name = self.name.clone();
-        let request = if remote { Pair::RequestRemote { name } } else { Pair::Request { name } };
+        let request = Pair::Request { name: self.name.clone(), remote };
         send.write_all(&protocol::encode_msg(&request))
             .await
             .context("sending pairing request")?;
-        let reply = tokio::time::timeout(PAIR_DECISION_TIMEOUT + Duration::from_secs(10), protocol::read_msg(&mut recv))
+        let mut reply = tokio::time::timeout(CONNECT_TIMEOUT, protocol::read_msg(&mut recv))
             .await
             .context("no answer in time")?
             .context("reading answer")?;
+        if let Pair::Challenge { nonce } = reply {
+            let code = protocol::pairing_code(self.id().as_bytes(), peer.as_bytes(), &nonce);
+            let _ = self.inner.events.send(NodeEvent::PairCode { id: peer, code });
+            reply = tokio::time::timeout(PAIR_DECISION_TIMEOUT + Duration::from_secs(10), protocol::read_msg(&mut recv))
+                .await
+                .context("no answer in time")?
+                .context("reading answer")?;
+        }
         conn.close(0u32.into(), b"done");
         match reply {
-            Pair::Reply { accepted, name } => Ok((accepted, name)),
+            Pair::Reply { accepted, name } => Ok((accepted, protocol::clean_name(&name))),
             other => bail!("unexpected pairing message {other:?}"),
         }
     }
@@ -264,8 +281,7 @@ impl Node {
             .await
             .context("no request")??
         {
-            Pair::Request { name } => (name, false),
-            Pair::RequestRemote { name } => (name, true),
+            Pair::Request { name, remote } => (protocol::clean_name(&name), remote),
             _ => bail!("expected a pairing request"),
         };
         if !self.inner.discoverable.load(std::sync::atomic::Ordering::Acquire) {
@@ -286,7 +302,12 @@ impl Node {
             }
             pending.insert(peer, tx);
         }
-        let code = protocol::pairing_code(self.id().as_bytes(), peer.as_bytes());
+        let mut nonce = [0u8; 32];
+        getrandom::fill(&mut nonce).map_err(|err| anyhow::anyhow!("no randomness: {err}"))?;
+        send.write_all(&protocol::encode_msg(&Pair::Challenge { nonce }))
+            .await
+            .context("sending challenge")?;
+        let code = protocol::pairing_code(self.id().as_bytes(), peer.as_bytes(), &nonce);
         let _ = self.inner.events.send(NodeEvent::PairRequest { id: peer, name, code, remote });
 
         let accepted = tokio::select! {
@@ -358,7 +379,7 @@ async fn discovery_loop(node: Node, mdns: MdnsAddressLookup) {
                 let name = endpoint_info
                     .data
                     .user_data()
-                    .and_then(|d| d.as_ref().strip_prefix(USER_DATA_PREFIX).map(str::to_string));
+                    .and_then(|d| d.as_ref().strip_prefix(USER_DATA_PREFIX).map(protocol::clean_name));
                 match name {
                     Some(name) => {
                         listed.insert(id);
@@ -393,9 +414,11 @@ enum Route {
     Remotes,
 }
 
+/// `remote`: the sessions are with remote controls, which only control this machine.
 async fn maintain(
     node: Node,
     mut target: Target,
+    remote: bool,
     current: Arc<Mutex<Option<Session>>>,
     events: mpsc::UnboundedSender<Event>,
 ) {
@@ -431,7 +454,7 @@ async fn maintain(
             previous.shutdown("replaced by new connection").await;
         }
 
-        let session = match Session::establish(conn, dialer, &node.name, events.clone()).await {
+        let session = match Session::establish(conn, dialer, remote, &node.name, events.clone()).await {
             Ok(session) => session,
             Err(err) => {
                 warn!("handshake failed: {err:#}");

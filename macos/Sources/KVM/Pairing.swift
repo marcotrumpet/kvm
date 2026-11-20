@@ -10,7 +10,8 @@ final class Pairing: ObservableObject {
     struct Outgoing: Equatable {
         let id: String
         let name: String
-        let code: String
+        /// Known once the other machine has the request.
+        var code: String?
     }
 
     @Published private(set) var nearby: [Machine] = []
@@ -39,7 +40,7 @@ final class Pairing: ObservableObject {
     func requestPairing(with machine: Machine) {
         guard core.requestPairing(machine.id) else { return }
         message = nil
-        outgoing = Outgoing(id: machine.id, name: machine.name, code: core.pairingCode(machine.id) ?? "")
+        outgoing = Outgoing(id: machine.id, name: machine.name)
     }
 
     /// Pairs with `id` without asking the other machine (it must do the same with ours).
@@ -75,6 +76,8 @@ final class Pairing: ObservableObject {
             } else {
                 askToAccept(id: id, name: name, code: code)
             }
+        case .pairCode(let id, let code):
+            if outgoing?.id == id { outgoing?.code = code }
         case .pairResult(let id, let accepted, let detail, let failed):
             guard outgoing?.id == id else { return }
             let name = outgoing?.name ?? detail

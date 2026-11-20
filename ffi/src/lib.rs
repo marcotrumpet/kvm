@@ -50,6 +50,7 @@ pub const KVM_EV_DISCOVERED: u32 = 20;
 pub const KVM_EV_EXPIRED: u32 = 21;
 pub const KVM_EV_PAIR_REQUEST: u32 = 22;
 pub const KVM_EV_PAIR_RESULT: u32 = 23;
+pub const KVM_EV_PAIR_CODE: u32 = 24;
 
 /// See `kvm.h` for the meaning of each field per event kind.
 #[repr(C)]
@@ -421,6 +422,7 @@ fn dispatch_node(event: &NodeEvent, callback: KvmEventCallback, ctx: *mut c_void
             let failed = error.is_some() as i64;
             (KVM_EV_PAIR_RESULT, id, Some(error.clone().unwrap_or_else(|| name.clone())), failed, *accepted)
         }
+        NodeEvent::PairCode { id, code } => (KVM_EV_PAIR_CODE, id, None, code.parse().unwrap_or(0), false),
     };
     let id = CString::new(id.to_string()).ok();
     let text = text.and_then(|t| CString::new(t).ok());
@@ -450,7 +452,8 @@ pub unsafe extern "C" fn kvm_set_discoverable(node: *const KvmNode, on: bool) {
     node.node.set_discoverable(on);
 }
 
-/// Asks `peer` to pair; the answer arrives as KVM_EV_PAIR_RESULT. False if `peer` is invalid.
+/// Asks `peer` to pair; the code to compare arrives as KVM_EV_PAIR_CODE, the answer as
+/// KVM_EV_PAIR_RESULT. False if `peer` is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kvm_pair_request(node: *const KvmNode, peer: *const c_char) -> bool {
     unsafe { pair_request(node, peer, false) }
@@ -468,16 +471,6 @@ unsafe fn pair_request(node: *const KvmNode, peer: *const c_char, remote: bool) 
     let Some(peer) = (unsafe { peer_arg(peer) }) else { return false };
     let _guard = node.rt.enter();
     node.node.request_pairing(peer, remote);
-    true
-}
-
-/// Writes the 6-digit code both machines show while pairing with `peer` (len >= 7).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn kvm_pairing_code(node: *const KvmNode, peer: *const c_char, buf: *mut c_char, len: usize) -> bool {
-    let node = unsafe { &*node };
-    let Some(peer) = (unsafe { peer_arg(peer) }) else { return false };
-    let code = kvm_core::protocol::pairing_code(node.node.id().as_bytes(), peer.as_bytes());
-    write_c_str(&code, buf, len);
     true
 }
 

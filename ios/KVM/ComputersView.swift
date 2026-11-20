@@ -116,9 +116,13 @@ private struct PairingSheet: View {
         VStack(spacing: 20) {
             ProgressView()
             Text("Allow this device on \(pairing.name)").font(.title3.bold()).multilineTextAlignment(.center)
-            Text("Check that it shows the same code:").foregroundStyle(.secondary)
-            Text(spaced(pairing.code))
-                .font(.system(size: 40, weight: .semibold, design: .monospaced))
+            if let code = pairing.code {
+                Text("Check that it shows the same code:").foregroundStyle(.secondary)
+                Text(spaced(code))
+                    .font(.system(size: 40, weight: .semibold, design: .monospaced))
+            } else {
+                Text("Reaching it…").foregroundStyle(.secondary)
+            }
             Button("Cancel", role: .cancel, action: cancel)
         }
         .padding(32)

@@ -223,8 +223,13 @@ async fn send_all(conn: &Connection, transfer: u64, paths: Vec<PathBuf>, clipboa
         }
         stream.finish()?;
         // Wait until the peer has the entry: folders must exist before their contents,
-        // and "done" should mean delivered.
-        stream.stopped().await.ok();
+        // and "done" should mean delivered. Code 0 is a stream it read what it needed of;
+        // any other means it didn't take the entry.
+        if let Ok(Some(code)) = stream.stopped().await
+            && code != 0u32.into()
+        {
+            bail!("{} wasn't taken by the other machine", header.path);
+        }
     }
     let _ = events.send(Event::FileSendProgress { transfer, sent, total });
     info!("sent {count} entries, {total} bytes");
@@ -274,13 +279,8 @@ async fn receive_entry(recv: &mut RecvStream, header: &FileHeader, events: &Even
     tokio::fs::create_dir_all(&root).await?;
     // A clipboard transfer has a fresh folder of its own: names can't clash.
     let top = if header.clipboard { parts[0].clone() } else { top_level_name(header.transfer, &parts[0], &root) };
-    let mut dest = root.join(&top);
-    for part in &parts[1..] {
-        dest.push(part);
-    }
-    // Every folder between the root and the entry must be a real folder, never a link
-    // received earlier: writing through a link could land anywhere.
-    refuse_links(&root, &dest)?;
+    let mut rel = vec![top];
+    rel.extend_from_slice(&parts[1..]);
     let display = parts.join("/");
     let progress = |received: u64| Event::FileReceiveProgress {
         transfer: header.transfer,
@@ -292,25 +292,34 @@ async fn receive_entry(recv: &mut RecvStream, header: &FileHeader, events: &Even
 
     match header.kind {
         Kind::Dir => {
-            tokio::fs::create_dir_all(&dest).await?;
+            let dest = tokio::task::spawn_blocking(move || real_dirs(&root, &rel)).await??;
             // Keep the folder writable for its contents, which arrive next.
             set_mode(&dest, header.mode | 0o700);
             return Ok(dest);
         }
         Kind::Symlink => {
             check_link_target(&parts, &header.target)?;
+            let dir = real_dirs(&root, &rel[..rel.len() - 1])?;
+            let dest = dir.join(&rel[rel.len() - 1]);
             make_symlink(&header.target, &dest)?;
+            quarantine(&dest);
             return Ok(dest);
         }
         Kind::File => {}
     }
 
-    let dir = dest.parent().context("no parent directory")?.to_path_buf();
-    tokio::fs::create_dir_all(&dir).await?;
-    let file_name = dest.file_name().context("no file name")?.to_string_lossy().into_owned();
+    // Entries arrive in parallel, so a link may appear at any moment; but nothing that
+    // exists is ever replaced, so folders checked to be real stay real.
+    let dir = {
+        let (root, rel) = (root.clone(), rel[..rel.len() - 1].to_vec());
+        tokio::task::spawn_blocking(move || real_dirs(&root, &rel)).await??
+    };
+    let file_name = &rel[rel.len() - 1];
+    let dest = dir.join(file_name);
     let partial = dir.join(format!(".{file_name}.kvmpart"));
 
-    let mut file = tokio::fs::File::create(&partial).await?;
+    let mut file = open_partial(&partial).await?;
+    quarantine(&partial);
     let mut buf = vec![0u8; CHUNK];
     let mut received = 0u64;
     let mut last_report = Instant::now();
@@ -369,9 +378,6 @@ fn set_mode(_: &Path, _: u32) {}
 
 #[cfg(unix)]
 fn make_symlink(target: &str, dest: &Path) -> Result<()> {
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
     std::os::unix::fs::symlink(target, dest).with_context(|| format!("creating link {}", dest.display()))
 }
 
@@ -380,39 +386,82 @@ fn make_symlink(_: &str, dest: &Path) -> Result<()> {
     bail!("symbolic links are not supported here ({})", dest.display())
 }
 
-/// Fails if any existing path between `root` (exclusive) and `dest` (inclusive) is a link.
-fn refuse_links(root: &Path, dest: &Path) -> Result<()> {
-    let rel = dest.strip_prefix(root).context("entry outside its folder")?;
+/// Makes the folders `rel` below `root`, one at a time, and returns the last. Fails if any
+/// of them is a link (or not a folder): writing through a link received earlier could
+/// land anywhere. Nothing received replaces what exists, so the check holds afterwards.
+fn real_dirs(root: &Path, rel: &[String]) -> Result<PathBuf> {
     let mut path = root.to_path_buf();
-    for part in rel.components() {
+    for part in rel {
         path.push(part);
-        match std::fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => bail!("{} is a link; not writing through it", path.display()),
-            Ok(_) => {}
-            Err(_) => break, // doesn't exist yet: nothing below it can either
+        match std::fs::create_dir(&path) {
+            Ok(()) => quarantine(&path),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err).with_context(|| format!("creating {}", path.display())),
+        }
+        let meta = std::fs::symlink_metadata(&path)?;
+        if !meta.is_dir() {
+            bail!("{} is not a folder; not writing through it", path.display());
         }
     }
-    Ok(())
+    Ok(path)
 }
 
+/// Creates (or truncates) a partial file, never through a link.
+async fn open_partial(path: &Path) -> Result<tokio::fs::File> {
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.custom_flags(libc::O_NOFOLLOW);
+    opts.open(path).await.with_context(|| format!("creating {}", path.display()))
+}
+
+/// Marks a received item as downloaded, like AirDrop and browsers do, so Gatekeeper checks
+/// an app or script before it first runs.
+#[cfg(target_os = "macos")]
+fn quarantine(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let value = format!("0081;{now:08x};KVM;");
+    let ok = unsafe {
+        libc::setxattr(
+            c_path.as_ptr(),
+            c"com.apple.quarantine".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            libc::XATTR_NOFOLLOW,
+        )
+    } == 0;
+    if !ok {
+        warn!("quarantining {}: {}", path.display(), std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn quarantine(_: &Path) {}
+
 /// A received link may only point inside the item that was sent (as app bundles'
-/// `Versions/Current -> A` do), never to an absolute path or above the item.
+/// `Versions/Current -> A` do), never to an absolute path or above the item. Any `..`
+/// must come first: after a name, which may itself be a link, it could go anywhere.
 fn check_link_target(parts: &[String], target: &str) -> Result<()> {
     let target_path = Path::new(target);
     if target.is_empty() || target_path.is_absolute() {
         bail!("link to {target:?} not allowed");
     }
+    if parts.len() < 2 {
+        bail!("a link on its own isn't received, only inside a folder");
+    }
     // Depth below the sent item of the folder holding the link.
-    let mut depth = parts.len() as i64 - 2;
+    let mut depth = parts.len() - 2;
+    let mut descended = false;
     for component in target_path.components() {
         match component {
+            Component::ParentDir if descended || depth == 0 => bail!("link to {target:?} leaves the sent item"),
             Component::ParentDir => depth -= 1,
-            Component::Normal(_) => depth += 1,
+            Component::Normal(_) => descended = true,
             Component::CurDir => {}
             _ => bail!("link to {target:?} not allowed"),
-        }
-        if depth < -1 {
-            bail!("link to {target:?} leaves the sent item");
         }
     }
     Ok(())
@@ -501,12 +550,17 @@ mod tests {
         assert!(check_link_target(&link, "A").is_ok());
         let link = parts("My.app/Contents/Frameworks/X.framework/X");
         assert!(check_link_target(&link, "Versions/Current/X").is_ok());
-        assert!(check_link_target(&parts("Folder/link"), "../Folder/file").is_ok());
+        assert!(check_link_target(&parts("Folder/Sub/link"), "../file").is_ok());
+        assert!(check_link_target(&parts("Folder/link"), "./file").is_ok());
         // Escapes.
         assert!(check_link_target(&parts("Folder/link"), "/etc/passwd").is_err());
         assert!(check_link_target(&parts("Folder/link"), "../../.ssh").is_err());
-        assert!(check_link_target(&parts("link"), "../x").is_err());
+        assert!(check_link_target(&parts("Folder/link"), "../Other").is_err());
         assert!(check_link_target(&parts("Folder/link"), "").is_err());
+        assert!(check_link_target(&parts("link"), "x").is_err());
+        // Through another link: Folder/a -> .. would make "a/.." the home folder.
+        assert!(check_link_target(&parts("Folder/b"), "a/..").is_err());
+        assert!(check_link_target(&parts("Folder/Sub/b"), "../a/../..").is_err());
     }
 
     #[test]
@@ -514,8 +568,27 @@ mod tests {
         let root = std::env::temp_dir().join(format!("kvm-links-test-{}", std::process::id()));
         std::fs::create_dir_all(root.join("Item")).unwrap();
         std::os::unix::fs::symlink("/tmp", root.join("Item/sneaky")).unwrap();
-        assert!(refuse_links(&root, &root.join("Item/sneaky/evil")).is_err());
-        assert!(refuse_links(&root, &root.join("Item/fine/file")).is_ok());
+        let rel = |p: &str| p.split('/').map(String::from).collect::<Vec<_>>();
+        assert!(real_dirs(&root, &rel("Item/sneaky/evil")).is_err());
+        assert!(real_dirs(&root, &rel("Item/sneaky")).is_err());
+        assert!(!Path::new("/tmp/evil").exists());
+        assert_eq!(real_dirs(&root, &rel("Item/fine/deeper")).unwrap(), root.join("Item/fine/deeper"));
+        assert!(root.join("Item/fine/deeper").is_dir());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn received_items_are_quarantined() {
+        let root = std::env::temp_dir().join(format!("kvm-quarantine-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        real_dirs(&root, &["My.app".to_string()]).unwrap();
+        let out = std::process::Command::new("xattr")
+            .args(["-p", "com.apple.quarantine"])
+            .arg(root.join("My.app"))
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with("0081;"), "{out:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

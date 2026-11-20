@@ -645,6 +645,12 @@ impl App {
                     }
                 });
             }
+            NodeEvent::PairCode { id, code } => {
+                if self.state.lock().unwrap().asking == Some(id) {
+                    let text = format!("Check that the other computer shows this code: {}", spaced(&code));
+                    std::thread::spawn(move || dialog::tell("KVM", &text));
+                }
+            }
             NodeEvent::PairResult { id, name, accepted, error } => {
                 self.state.lock().unwrap().asking = None;
                 if accepted {

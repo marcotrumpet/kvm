@@ -59,6 +59,8 @@ enum {
                               // flag = as a remote control (trusted next to the paired peer)
     KVM_EV_PAIR_RESULT = 23,  // answer to kvm_pair_request; flag = accepted, text = name, or the
                               // error when a = 1
+    KVM_EV_PAIR_CODE = 24,    // while kvm_pair_request waits: a = the 6-digit code the other
+                              // machine shows with the request
 };
 
 typedef struct {
@@ -98,7 +100,6 @@ void kvm_set_discoverable(const KvmNode *node, bool on); // pairing mode, off by
 bool kvm_pair_request(const KvmNode *node, const char *peer);
 bool kvm_pair_request_remote(const KvmNode *node, const char *peer); // as a remote control
 bool kvm_pair_respond(const KvmNode *node, const char *peer, bool accept);
-bool kvm_pairing_code(const KvmNode *node, const char *peer, char *buf, size_t len); // len >= 7
 
 // Non-blocking; safe to call from an event tap callback.
 void kvm_enter(const KvmNode *node);

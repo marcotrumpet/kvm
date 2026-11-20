@@ -134,6 +134,16 @@ final class Awdl {
         }
     }
 
+    /// What the installed helper must be signed as: its identifier, and with a Developer ID
+    /// build, this app's team. (Local and ad-hoc builds have no team to check against.)
+    private static var helperRequirement: String {
+        var requirement = "identifier \"\(label)\""
+        if let team = Admin.ownTeam {
+            requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and " + requirement
+        }
+        return requirement
+    }
+
     private static var bundledHelper: String? {
         Bundle.main.url(forResource: "kvm-awdl-helper", withExtension: nil)?.path
     }
@@ -150,17 +160,24 @@ final class Awdl {
             "StandardErrorPath": "/Library/Logs/\(label).log",
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("\(label).plist")
-        try data.write(to: staged)
-        defer { try? FileManager.default.removeItem(at: staged) }
+        guard let xml = String(data: data, encoding: .utf8) else {
+            throw CoreError(description: "couldn't write the helper's settings")
+        }
 
+        // Everything root runs or reads is first put where only root can change it, then
+        // checked there: files in the app bundle or a temporary folder could be swapped
+        // by anything running as this user while the password is typed. Copied first,
+        // the helper must then carry its own identifier and this app's team.
         try Admin.run([
             "/bin/mkdir -p /Library/PrivilegedHelperTools",
             "(/bin/launchctl bootout system/\(label) 2>/dev/null || true)",
+            "/bin/rm -f \(Admin.quote(helperPath))",
             "/bin/cp \(Admin.quote(bundled)) \(Admin.quote(helperPath))",
             "/usr/sbin/chown root:wheel \(Admin.quote(helperPath))",
             "/bin/chmod 755 \(Admin.quote(helperPath))",
-            "/bin/cp \(Admin.quote(staged.path)) \(Admin.quote(plistPath))",
+            "(/usr/bin/codesign --verify --strict -R \(Admin.quote("=" + helperRequirement)) \(Admin.quote(helperPath)) || "
+                + "{ /bin/rm -f \(Admin.quote(helperPath)); exit 1; })",
+            "/usr/bin/printf '%s' \(Admin.quote(xml)) > \(Admin.quote(plistPath))",
             "/usr/sbin/chown root:wheel \(Admin.quote(plistPath))",
             "/bin/chmod 644 \(Admin.quote(plistPath))",
             "/bin/launchctl bootstrap system \(Admin.quote(plistPath))",
@@ -186,6 +203,18 @@ enum Admin {
 
     static func quote(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// The team that signed this app (Developer ID), nil for local and ad-hoc builds.
+    static var ownTeam: String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        return dict[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     /// A code signature's unique hash: the same code re-signed keeps it.

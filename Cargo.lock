@@ -2176,9 +2176,12 @@ name = "kvm-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
+ "getrandom 0.4.3",
  "iroh",
  "iroh-mdns-address-lookup",
+ "libc",
  "n0-future",
  "postcard",
  "serde",

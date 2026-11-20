@@ -116,13 +116,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-        // Pairing mode lasts while Settings is open, like Bluetooth's.
-        controller.core.setDiscoverable(true)
+        setPairingMode(true)
+    }
+
+    // Pairing mode lasts while Settings is in use, like Bluetooth's: on while it is the
+    // active window, and for a few minutes after, but not for days in the background.
+    private static let pairingModeLinger: TimeInterval = 5 * 60
+    private var pairingModeEnd: DispatchWorkItem?
+
+    private func setPairingMode(_ on: Bool) {
+        pairingModeEnd?.cancel()
+        pairingModeEnd = nil
+        controller.core.setDiscoverable(on)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if notification.object as? NSWindow === settingsWindow { setPairingMode(true) }
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as? NSWindow === settingsWindow else { return }
+        pairingModeEnd?.cancel()
+        let end = DispatchWorkItem { [weak self] in self?.setPairingMode(false) }
+        pairingModeEnd = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pairingModeLinger, execute: end)
     }
 
     func windowWillClose(_ notification: Notification) {
         if notification.object as? NSWindow === settingsWindow {
-            controller.core.setDiscoverable(false)
+            setPairingMode(false)
         }
     }
 }

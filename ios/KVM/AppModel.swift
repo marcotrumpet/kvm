@@ -18,7 +18,8 @@ final class AppModel: ObservableObject {
     struct PendingPairing: Equatable {
         let id: String
         let name: String
-        let code: String
+        /// Known once the computer has the request.
+        var code: String?
     }
 
     @Published private(set) var computers: [Computer] = Store.computers
@@ -87,7 +88,7 @@ final class AppModel: ObservableObject {
         }
         guard core.requestPairing(id, remote: true) else { return }
         message = nil
-        pairing = PendingPairing(id: id, name: name ?? "the computer", code: core.pairingCode(id) ?? "")
+        pairing = PendingPairing(id: id, name: name ?? "the computer")
     }
 
     /// Opens `kvm://pair?id=…&name=…` (the code in the Mac's KVM Settings). False if it isn't one.
@@ -112,6 +113,10 @@ final class AppModel: ObservableObject {
     }
 
     private func handle(_ event: MachineEvent) {
+        if case .pairCode(let id, let code) = event, pairing?.id == id {
+            pairing?.code = code
+            return
+        }
         guard case .pairResult(let id, let accepted, let detail, let failed) = event, let pending = pairing, pending.id == id else { return }
         pairing = nil
         if accepted {

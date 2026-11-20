@@ -157,6 +157,9 @@ struct Shared {
     /// Adapts the bitrate while the peer views our screen.
     rate_task: Mutex<Option<JoinHandle<()>>>,
     peer_name: String,
+    /// The peer is a remote control (phone, tablet): it controls and views this machine,
+    /// and may share its clipboard, but doesn't send files or lock this machine.
+    peer_is_remote: bool,
 }
 
 impl Shared {
@@ -176,9 +179,11 @@ pub struct Session {
 
 impl Session {
     /// Runs the handshake on a fresh connection and starts the session tasks.
+    /// `peer_is_remote`: see [`Shared::peer_is_remote`].
     pub(crate) async fn establish(
         conn: Connection,
         dialer: bool,
+        peer_is_remote: bool,
         name: &str,
         events: EventTx,
     ) -> Result<Session> {
@@ -197,7 +202,7 @@ impl Session {
                 conn.accept_bi().await.context("accepting control stream")?
             };
             let peer_name = match protocol::read_frame(&mut recv).await? {
-                Control::Hello { version, name } if version == PROTOCOL_VERSION => name,
+                Control::Hello { version, name } if version == PROTOCOL_VERSION => protocol::clean_name(&name),
                 Control::Hello { version, .. } => {
                     bail!("peer speaks protocol v{version}, we speak v{PROTOCOL_VERSION}")
                 }
@@ -227,6 +232,7 @@ impl Session {
             video: VideoSender::default(),
             rate_task: Mutex::new(None),
             peer_name,
+            peer_is_remote,
         });
         send.set_priority(video::CONTROL_PRIORITY).ok();
 
@@ -618,10 +624,12 @@ async fn control_loop(shared: Arc<Shared>, mut recv: RecvStream) {
                 }
             }
             Control::Lock => {
-                let _ = events.send(Event::LockRequested);
+                if !shared.peer_is_remote {
+                    let _ = events.send(Event::LockRequested);
+                }
             }
             Control::WakeAddress(mac) => {
-                if mac.len() == 6 {
+                if mac.len() == 6 && !shared.peer_is_remote {
                     let _ = events.send(Event::WakeAddress(mac));
                 }
             }
@@ -767,6 +775,10 @@ async fn uni_loop(shared: Arc<Shared>) {
                     }
                     Err(err) => warn!("clipboard from peer not received: {err}"),
                 },
+                protocol::STREAM_FILE if shared.peer_is_remote => {
+                    warn!("refusing files from a remote control");
+                    let _ = recv.stop(1u32.into());
+                }
                 protocol::STREAM_FILE => crate::files::receive(recv, shared.events.clone()).await,
                 other => warn!("unknown stream kind {other}"),
             }

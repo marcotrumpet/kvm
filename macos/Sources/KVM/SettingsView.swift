@@ -90,7 +90,7 @@ struct SettingsView: View {
                         } else if let outgoing = pairing.outgoing, outgoing.id == machine.id {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
-                                Text("Accept on \(machine.name) · code \(Pairing.spaced(outgoing.code))")
+                                Text(outgoing.code.map { "Accept on \(machine.name) · code \(Pairing.spaced($0))" } ?? "Asking \(machine.name)…")
                                     .foregroundStyle(.secondary)
                             }
                         } else {

@@ -478,23 +478,32 @@ pub mod clipboard {
 }
 
 /// Questions and notices through zenity or kdialog, whichever is installed. Blocking.
+/// The text is shown as-is (it can hold a name another machine chose): zenity without
+/// markup, and for kdialog and notifications, which guess, with no angle brackets.
 pub mod dialog {
     use std::process::Command;
 
+    fn no_tags(text: &str) -> String {
+        text.replace('<', "‹").replace('>', "›")
+    }
+
     pub fn ask(title: &str, text: &str) -> bool {
-        let zenity = Command::new("zenity").args(["--question", "--title", title, "--text", text]).status();
+        let zenity = Command::new("zenity")
+            .args(["--question", "--no-markup", "--title", title, "--text", text])
+            .status();
         match zenity {
             Ok(status) => status.success(),
             Err(_) => Command::new("kdialog")
-                .args(["--title", title, "--yesno", text])
+                .args(["--title", title, "--yesno", &no_tags(text)])
                 .status()
                 .is_ok_and(|s| s.success()),
         }
     }
 
     pub fn tell(title: &str, text: &str) {
-        if Command::new("zenity").args(["--info", "--title", title, "--text", text]).status().is_err() {
-            let _ = Command::new("notify-send").args([title, text]).status();
+        let zenity = Command::new("zenity").args(["--info", "--no-markup", "--title", title, "--text", text]).status();
+        if zenity.is_err() {
+            let _ = Command::new("notify-send").args([title, &no_tags(text)]).status();
         }
     }
 

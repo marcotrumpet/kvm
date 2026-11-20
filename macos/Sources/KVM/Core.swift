@@ -57,6 +57,8 @@ enum MachineEvent {
     case pairRequest(id: String, name: String, code: String, remote: Bool)
     /// `detail` is the other machine's name, or the error if it `failed`.
     case pairResult(id: String, accepted: Bool, detail: String, failed: Bool)
+    /// While our pairing request waits: the code the other machine shows with it.
+    case pairCode(id: String, code: String)
 }
 
 struct VideoParams: Equatable {
@@ -340,11 +342,6 @@ final class Core {
     }
     func respondPairing(_ peer: String, accept: Bool) -> Bool { kvm_pair_respond(node, peer, accept) }
 
-    func pairingCode(_ peer: String) -> String? {
-        var buf = [CChar](repeating: 0, count: 8)
-        return kvm_pairing_code(node, peer, &buf, buf.count) ? String(cString: buf) : nil
-    }
-
     var isConnected: Bool { kvm_is_connected(node) }
 
     func enter() { kvm_enter(node) }
@@ -552,6 +549,7 @@ private extension MachineEvent {
         case KVM_EV_PAIR_REQUEST:
             self = .pairRequest(id: id, name: text, code: String(format: "%06lld", e.a), remote: e.flag)
         case KVM_EV_PAIR_RESULT: self = .pairResult(id: id, accepted: e.flag, detail: text, failed: e.a != 0)
+        case KVM_EV_PAIR_CODE: self = .pairCode(id: id, code: String(format: "%06lld", e.a))
         default: return nil
         }
     }
