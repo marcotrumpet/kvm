@@ -8,3 +8,4 @@ dist/
 *.p12
 *.pem
 xcuserdata/
+ios/build/
