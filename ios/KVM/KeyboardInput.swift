@@ -48,7 +48,7 @@ enum HID {
 /// Invisible first responder for the on-screen keyboard. Typed text is sent as text (so it
 /// comes out right whatever the computer's keyboard layout); keys with the sticky modifiers
 /// of the bar above the keyboard, and everything from a hardware keyboard, as key presses.
-final class KeyboardInputView: UIView, UIKeyInput {
+final class KeyboardInputView: UIView, UITextInput {
     var onText: ((String) -> Void)?
     /// A key press with modifiers (HID usages), pressed and released.
     var onKey: ((UInt16, [UInt16]) -> Void)?
@@ -58,6 +58,7 @@ final class KeyboardInputView: UIView, UIKeyInput {
     var onResign: (() -> Void)?
 
     private var sticky: Set<UInt16> = []
+    weak var inputDelegate: UITextInputDelegate?
     private var modifierButtons: [UInt16: UIButton] = [:]
 
     // UITextInputTraits: plain keys, no help from iOS.
@@ -198,4 +199,82 @@ final class KeyboardInputView: UIView, UIKeyInput {
             button.configuration = config
         }
     }
+}
+
+/// The on-screen keyboard only repeats a held delete for a view that is a text document
+/// (plain UIKeyInput gets one delete per press). So this is one: a fixed, invisible text
+/// with the caret at its end that never changes, since what's typed goes to the computer.
+extension KeyboardInputView {
+    private static let document = String(repeating: "\u{200B}", count: 16)
+
+    private final class Position: UITextPosition {
+        let offset: Int
+        init(_ offset: Int) { self.offset = max(0, min(offset, KeyboardInputView.document.count)) }
+    }
+
+    private final class Range: UITextRange {
+        let from: Position, to: Position
+        init(_ from: Position, _ to: Position) { self.from = from; self.to = to }
+        override var start: UITextPosition { from }
+        override var end: UITextPosition { to }
+        override var isEmpty: Bool { from.offset == to.offset }
+    }
+
+    private func offset(_ p: UITextPosition) -> Int { (p as? Position)?.offset ?? 0 }
+
+    var selectedTextRange: UITextRange? {
+        get { Range(Position(Self.document.count), Position(Self.document.count)) }
+        set {} // the caret stays at the end
+    }
+    var markedTextRange: UITextRange? { nil }
+    var markedTextStyle: [NSAttributedString.Key: Any]? { get { nil } set {} }
+    func setMarkedText(_ markedText: String?, selectedRange: NSRange) {}
+    func unmarkText() {}
+
+    var beginningOfDocument: UITextPosition { Position(0) }
+    var endOfDocument: UITextPosition { Position(Self.document.count) }
+    var tokenizer: UITextInputTokenizer { UITextInputStringTokenizer(textInput: self) }
+
+    func text(in range: UITextRange) -> String? {
+        let doc = Array(Self.document)
+        let a = offset(range.start), b = offset(range.end)
+        return a < b ? String(doc[a..<b]) : ""
+    }
+    func replace(_ range: UITextRange, withText text: String) {
+        if text.isEmpty { deleteBackward() } else { insertText(text) }
+    }
+
+    func textRange(from fromPosition: UITextPosition, to toPosition: UITextPosition) -> UITextRange? {
+        Range(Position(offset(fromPosition)), Position(offset(toPosition)))
+    }
+    func position(from position: UITextPosition, offset: Int) -> UITextPosition? {
+        let o = self.offset(position) + offset
+        return (0...Self.document.count).contains(o) ? Position(o) : nil
+    }
+    func position(from position: UITextPosition, in direction: UITextLayoutDirection, offset: Int) -> UITextPosition? {
+        switch direction {
+        case .left, .up: self.position(from: position, offset: -offset)
+        default: self.position(from: position, offset: offset)
+        }
+    }
+    func compare(_ position: UITextPosition, to other: UITextPosition) -> ComparisonResult {
+        let a = offset(position), b = offset(other)
+        return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
+    }
+    func offset(from: UITextPosition, to toPosition: UITextPosition) -> Int { offset(toPosition) - offset(from) }
+    func position(within range: UITextRange, farthestIn direction: UITextLayoutDirection) -> UITextPosition? {
+        direction == .left || direction == .up ? range.start : range.end
+    }
+    func characterRange(byExtending position: UITextPosition, in direction: UITextLayoutDirection) -> UITextRange? {
+        textRange(from: position, to: position)
+    }
+
+    func baseWritingDirection(for position: UITextPosition, in direction: UITextStorageDirection) -> NSWritingDirection { .leftToRight }
+    func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+    func firstRect(for range: UITextRange) -> CGRect { .zero }
+    func caretRect(for position: UITextPosition) -> CGRect { .zero }
+    func selectionRects(for range: UITextRange) -> [UITextSelectionRect] { [] }
+    func closestPosition(to point: CGPoint) -> UITextPosition? { endOfDocument }
+    func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? { range.end }
+    func characterRange(at point: CGPoint) -> UITextRange? { nil }
 }
