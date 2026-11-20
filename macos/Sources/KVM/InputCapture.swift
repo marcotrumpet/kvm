@@ -51,6 +51,8 @@ final class InputCapture {
         var parked: CGPoint?
         /// How often it moved anyway this time, put back each time.
         var strays = 0
+        /// Watches the pointer while it is parked.
+        var parkWatch: DispatchSourceTimer?
         /// Modifier keys (virtual key codes) the peer currently has held because of us.
         var sentModifiers: Set<UInt16> = []
         /// Of those, the ones pressed only because a key event carried the modifier flag
@@ -147,8 +149,10 @@ final class InputCapture {
             $0.buttonsDown = []
             $0.fracX = 0
             $0.fracY = 0
-            $0.parked = CGEvent(source: nil)?.location
+            $0.parked = nil // taken by the first check: the event switching may still move it
             $0.strays = 0
+            $0.parkWatch?.cancel()
+            $0.parkWatch = watchParked()
         }
     }
 
@@ -156,9 +160,11 @@ final class InputCapture {
         let strays = state.withLock { s -> Int in
             s.remote = false
             s.parked = nil
+            s.parkWatch?.cancel()
+            s.parkWatch = nil
             return s.strays
         }
-        if strays > 0 { Log.warn("this Mac's pointer moved \(strays) times while controlling the peer; put back each time") }
+        if strays > 0 { Log.warn("this Mac's pointer was seen away from where it was parked \(strays) times (checked every 50 ms) while controlling the peer; put back each time") }
     }
 
     /// Puts this Mac's pointer back where it was parked, detached and hidden again: switching
@@ -319,18 +325,28 @@ final class InputCapture {
     }
 
     /// Swallowing a move doesn't stop the pointer here: only being detached from the mouse
-    /// does. If it moved anyway (the event's location or the cursor's own), it goes back
-    /// and is detached again.
-    private func keepParked(_ location: CGPoint) {
-        let current = CGEvent(source: nil)?.location ?? location
-        let moved = state.withLock { s -> Bool in
-            guard let p = s.parked else { return false }
-            let away = { (q: CGPoint) in abs(q.x - p.x) > 1 || abs(q.y - p.y) > 1 }
-            guard away(location) || away(current) else { return false }
-            s.strays += 1
-            return true
+    /// does. Checked from outside the tap, where an event's location (and the cursor's,
+    /// read while handling one) already includes that event's motion. If the pointer moved
+    /// anyway, it goes back and is detached again.
+    private func watchParked() -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInteractive))
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
+        timer.setEventHandler { [weak self] in
+            guard let self, let location = CGEvent(source: nil)?.location else { return }
+            let moved = state.withLock { s -> Bool in
+                guard s.remote else { return false }
+                guard let p = s.parked else {
+                    s.parked = location
+                    return false
+                }
+                guard abs(location.x - p.x) > 2 || abs(location.y - p.y) > 2 else { return false }
+                s.strays += 1
+                return true
+            }
+            if moved { repark() }
         }
-        if moved { repark() }
+        timer.resume()
+        return timer
     }
 
     private func logUnknown(_ id: Int, _ what: String) {
@@ -382,7 +398,6 @@ final class InputCapture {
     private func forward(type: CGEventType, event: CGEvent) {
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-            keepParked(event.location)
             let (dx, dy) = state.withLock { s -> (Int64, Int64) in
                 s.fracX += event.getDoubleValueField(.mouseEventDeltaX)
                 s.fracY += event.getDoubleValueField(.mouseEventDeltaY)
