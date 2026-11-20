@@ -477,9 +477,11 @@ final class RemoteViewController: UIViewController {
         barBackground.contentView.addSubview(barScroller)
         barBackground.contentView.addSubview(collapse)
         view.addSubview(barBackground)
-        // As wide as the buttons, until that would run past the screen's leading edge.
+        // As wide as the buttons, until that would run past the screen's leading edge. Below
+        // the buttons' compression resistance, so on a narrow screen they keep their size and
+        // scroll rather than being squeezed into the space.
         let fitContent = barScroller.widthAnchor.constraint(equalTo: bar.widthAnchor)
-        fitContent.priority = .defaultHigh
+        fitContent.priority = .defaultHigh - 1
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: barScroller.contentLayoutGuide.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: barScroller.contentLayoutGuide.trailingAnchor),
