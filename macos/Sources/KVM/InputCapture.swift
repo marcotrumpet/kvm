@@ -46,6 +46,10 @@ final class InputCapture {
         var swallowKeyUp: Set<UInt16> = []
         var fracX = 0.0
         var fracY = 0.0
+        /// Where this Mac's pointer was left when control moved to the peer. It should stay
+        /// there (it is detached from the mouse), but macOS sometimes attaches it again.
+        var parked: CGPoint?
+        var strayLogged = false
         /// Modifier keys (virtual key codes) the peer currently has held because of us.
         var sentModifiers: Set<UInt16> = []
         /// Of those, the ones pressed only because a key event carried the modifier flag
@@ -142,6 +146,8 @@ final class InputCapture {
             $0.buttonsDown = []
             $0.fracX = 0
             $0.fracY = 0
+            $0.parked = CGEvent(source: nil)?.location
+            $0.strayLogged = false
         }
     }
 
@@ -297,6 +303,21 @@ final class InputCapture {
         if pushed { onEdgePush?(p) }
     }
 
+    /// Swallowing a move doesn't stop the pointer here: only being detached from the mouse
+    /// does. If it moved anyway, it goes back and is detached again.
+    private func keepParked(_ location: CGPoint) {
+        let (parked, firstTime) = state.withLock { s -> (CGPoint?, Bool) in
+            guard let p = s.parked, abs(location.x - p.x) > 1 || abs(location.y - p.y) > 1 else { return (nil, false) }
+            defer { s.strayLogged = true }
+            return (p, !s.strayLogged)
+        }
+        guard let parked else { return }
+        if firstTime { Log.warn("this Mac's pointer moved while controlling the peer: detaching it again") }
+        CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
+        CGWarpMouseCursorPosition(parked)
+        CGAssociateMouseAndMouseCursorPosition(0)
+    }
+
     private func logUnknown(_ id: Int, _ what: String) {
         guard state.withLock({ $0.loggedUnknown.insert(id).inserted }) else { return }
         Log.warn("not forwarded: \(what) (no mapping yet)")
@@ -346,6 +367,7 @@ final class InputCapture {
     private func forward(type: CGEventType, event: CGEvent) {
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            keepParked(event.location)
             let (dx, dy) = state.withLock { s -> (Int64, Int64) in
                 s.fracX += event.getDoubleValueField(.mouseEventDeltaX)
                 s.fracY += event.getDoubleValueField(.mouseEventDeltaY)
