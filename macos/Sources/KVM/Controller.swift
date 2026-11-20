@@ -103,6 +103,11 @@ final class Controller {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [unowned self] _ in screensChanged() }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [unowned self] _ in
+            if mode.withLock({ $0 }) == .controllingPeer { capture.repark() }
+        }
         clipboard.start()
     }
 
@@ -478,6 +483,18 @@ enum Cursor {
             guard !hidden else { return }
             hidden = true
             allowBackgroundCursorChanges()
+            CGDisplayHideCursor(CGMainDisplayID())
+        }
+    }
+
+    /// Detached and hidden again, if it is meant to be: macOS undoes both on some changes,
+    /// such as switching desktops.
+    static func reassert() {
+        CGAssociateMouseAndMouseCursorPosition(0)
+        DispatchQueue.main.async {
+            guard hidden else { return }
+            allowBackgroundCursorChanges()
+            CGDisplayShowCursor(CGMainDisplayID())
             CGDisplayHideCursor(CGMainDisplayID())
         }
     }

@@ -49,7 +49,8 @@ final class InputCapture {
         /// Where this Mac's pointer was left when control moved to the peer. It should stay
         /// there (it is detached from the mouse), but macOS sometimes attaches it again.
         var parked: CGPoint?
-        var strayLogged = false
+        /// How often it moved anyway this time, put back each time.
+        var strays = 0
         /// Modifier keys (virtual key codes) the peer currently has held because of us.
         var sentModifiers: Set<UInt16> = []
         /// Of those, the ones pressed only because a key event carried the modifier flag
@@ -147,12 +148,26 @@ final class InputCapture {
             $0.fracX = 0
             $0.fracY = 0
             $0.parked = CGEvent(source: nil)?.location
-            $0.strayLogged = false
+            $0.strays = 0
         }
     }
 
     func endRemote() {
-        state.withLock { $0.remote = false }
+        let strays = state.withLock { s -> Int in
+            s.remote = false
+            s.parked = nil
+            return s.strays
+        }
+        if strays > 0 { Log.warn("this Mac's pointer moved \(strays) times while controlling the peer; put back each time") }
+    }
+
+    /// Puts this Mac's pointer back where it was parked, detached and hidden again: switching
+    /// desktops (Spaces) attaches it to the mouse again. Any thread.
+    func repark() {
+        guard let parked = state.withLock({ $0.remote ? $0.parked : nil }) else { return }
+        CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
+        CGWarpMouseCursorPosition(parked)
+        Cursor.reassert()
     }
 
     /// Creates the tap. Fails (returns false) until Accessibility / Input Monitoring are granted.
@@ -304,18 +319,18 @@ final class InputCapture {
     }
 
     /// Swallowing a move doesn't stop the pointer here: only being detached from the mouse
-    /// does. If it moved anyway, it goes back and is detached again.
+    /// does. If it moved anyway (the event's location or the cursor's own), it goes back
+    /// and is detached again.
     private func keepParked(_ location: CGPoint) {
-        let (parked, firstTime) = state.withLock { s -> (CGPoint?, Bool) in
-            guard let p = s.parked, abs(location.x - p.x) > 1 || abs(location.y - p.y) > 1 else { return (nil, false) }
-            defer { s.strayLogged = true }
-            return (p, !s.strayLogged)
+        let current = CGEvent(source: nil)?.location ?? location
+        let moved = state.withLock { s -> Bool in
+            guard let p = s.parked else { return false }
+            let away = { (q: CGPoint) in abs(q.x - p.x) > 1 || abs(q.y - p.y) > 1 }
+            guard away(location) || away(current) else { return false }
+            s.strays += 1
+            return true
         }
-        guard let parked else { return }
-        if firstTime { Log.warn("this Mac's pointer moved while controlling the peer: detaching it again") }
-        CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
-        CGWarpMouseCursorPosition(parked)
-        CGAssociateMouseAndMouseCursorPosition(0)
+        if moved { repark() }
     }
 
     private func logUnknown(_ id: Int, _ what: String) {
@@ -480,6 +495,11 @@ final class InputCapture {
             return (s.swipeMotion, s.swipeProgress)
         }
         guard let finished else { return }
+        // Switching desktops attaches this Mac's pointer to the mouse again, here as well as
+        // on the peer; and the switch animates for a while.
+        for delay in [0.05, 0.4, 1.0] {
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + delay) { [weak self] in self?.repark() }
+        }
         Log.info(String(format: "three-finger swipe: motion %lld, progress %.2f", finished.motion, finished.progress))
         guard abs(finished.progress) > 0.1 else { return }
         switch finished.motion {
