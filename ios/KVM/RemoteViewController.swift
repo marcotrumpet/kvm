@@ -85,6 +85,8 @@ final class RemoteViewController: UIViewController {
 
     // Hardware keyboard and mouse
     private var heldKeys: Set<UInt16> = []
+    /// Sticky modifiers held for the drag in progress.
+    private var dragModifiers: [UInt16] = []
     private var repeatTimer: Timer?
     private var mouseRemainder = CGPoint.zero
     private var lastMouseMove: CFTimeInterval = 0
@@ -723,9 +725,9 @@ final class RemoteViewController: UIViewController {
         guard !pointerLocked else { return }
         point(at: g.location(in: videoView))
         switch g.state {
-        case .began: core?.sendButton(0, down: true)
+        case .began: dragDown()
         case .changed: break
-        default: core?.sendButton(0, down: false)
+        default: dragUp()
         }
     }
 
@@ -754,7 +756,7 @@ final class RemoteViewController: UIViewController {
             last = (p, now)
             if touchMode {
                 point(at: p)
-                core?.sendButton(0, down: true)
+                dragDown()
                 dragging = true
             }
         case .changed:
@@ -768,7 +770,7 @@ final class RemoteViewController: UIViewController {
         default:
             last = nil
             if dragging {
-                core?.sendButton(0, down: false)
+                dragUp()
                 dragging = false
             }
         }
@@ -976,7 +978,7 @@ final class RemoteViewController: UIViewController {
         switch g.state {
         case .began:
             last = (p, CACurrentMediaTime())
-            core?.sendButton(0, down: true)
+            dragDown()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .changed:
             guard let previous = last else { return }
@@ -984,13 +986,34 @@ final class RemoteViewController: UIViewController {
             move(by: CGPoint(x: p.x - previous.point.x, y: p.y - previous.point.y), over: 0, accelerate: false)
         default:
             last = nil
-            core?.sendButton(0, down: false)
+            dragUp()
         }
     }
 
+    /// A click, with the key bar's sticky modifiers held around it (⌘-click a link).
     private func click(_ button: Int) {
+        let modifiers = keyboard.takeStickyModifiers()
+        for m in modifiers { core?.sendKey(hid: m, down: true) }
         core?.sendButton(button, down: true)
         core?.sendButton(button, down: false)
+        for m in modifiers.reversed() { core?.sendKey(hid: m, down: false) }
+    }
+
+    /// The start of a drag: the sticky modifiers stay held until `dragUp` (⌥-drag copies).
+    private func dragDown() {
+        dragModifiers = keyboard.takeStickyModifiers()
+        for m in dragModifiers { core?.sendKey(hid: m, down: true) }
+        core?.sendButton(0, down: true)
+    }
+
+    private func dragUp() {
+        core?.sendButton(0, down: false)
+        releaseDragModifiers()
+    }
+
+    private func releaseDragModifiers() {
+        for m in dragModifiers.reversed() { core?.sendKey(hid: m, down: false) }
+        dragModifiers = []
     }
 
     private func point(at p: CGPoint) {
@@ -1057,6 +1080,7 @@ final class RemoteViewController: UIViewController {
         repeatTimer = nil
         for usage in heldKeys { core?.sendKey(hid: usage, down: false) }
         heldKeys.removeAll()
+        releaseDragModifiers()
     }
 
     // MARK: Mouse (iPad)

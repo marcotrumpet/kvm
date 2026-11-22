@@ -107,6 +107,16 @@ final class KeyboardInputView: UIView, UITextInput {
         }
     }
 
+    /// The sticky modifiers for a click (like ⌘-click), released here like after a key.
+    func takeStickyModifiers() -> [UInt16] {
+        let modifiers = sticky.sorted()
+        if !sticky.isEmpty {
+            sticky.removeAll()
+            updateModifierButtons()
+        }
+        return modifiers
+    }
+
     // MARK: Hardware keyboard
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
