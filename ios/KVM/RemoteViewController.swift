@@ -85,6 +85,8 @@ final class RemoteViewController: UIViewController {
 
     // Hardware keyboard and mouse
     private var heldKeys: Set<UInt16> = []
+    /// Sticky modifiers held for a hardware key that is down, by its usage.
+    private var keyModifiers: [UInt16: [UInt16]] = [:]
     /// Sticky modifiers held for the drag in progress.
     private var dragModifiers: [UInt16] = []
     private var repeatTimer: Timer?
@@ -1052,6 +1054,15 @@ final class RemoteViewController: UIViewController {
         let usage = UInt16(clamping: key.keyCode.rawValue)
         guard usage > 3 else { return false }
         if down {
+            // The key bar's sticky modifiers go with a key from a hardware keyboard too
+            // (⌘ on the bar, then Q on the keyboard), held until that key goes up.
+            if !HID.isModifier(usage), !heldKeys.contains(usage) {
+                let modifiers = keyboard.takeStickyModifiers().filter { !heldKeys.contains($0) }
+                if !modifiers.isEmpty {
+                    for m in modifiers { core?.sendKey(hid: m, down: true) }
+                    keyModifiers[usage] = modifiers
+                }
+            }
             heldKeys.insert(usage)
             core?.sendKey(hid: usage, down: true)
             repeatTimer?.invalidate()
@@ -1067,6 +1078,7 @@ final class RemoteViewController: UIViewController {
         } else {
             heldKeys.remove(usage)
             core?.sendKey(hid: usage, down: false)
+            for m in keyModifiers.removeValue(forKey: usage)?.reversed() ?? [] { core?.sendKey(hid: m, down: false) }
             if !HID.isModifier(usage) {
                 repeatTimer?.invalidate()
                 repeatTimer = nil
@@ -1080,6 +1092,8 @@ final class RemoteViewController: UIViewController {
         repeatTimer = nil
         for usage in heldKeys { core?.sendKey(hid: usage, down: false) }
         heldKeys.removeAll()
+        for m in keyModifiers.values.joined() { core?.sendKey(hid: m, down: false) }
+        keyModifiers = [:]
         releaseDragModifiers()
     }
 
