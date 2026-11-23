@@ -51,6 +51,9 @@ final class Controller {
         case edge
     }
     private let entry = OSAllocatedUnfairLock(initialState: Entry.hotkey)
+    /// Control of the peer was dropped by a stall, not by the user: taken again if the link
+    /// recovers before it is closed, so a brief hiccup doesn't need the hotkey again.
+    private let resumeAfterStall = OSAllocatedUnfairLock<Entry?>(initialState: nil)
     /// The peer's displays, as it last told us.
     private let peerDisplays = OSAllocatedUnfairLock(initialState: [DisplayInfo]())
     private let latency = OSAllocatedUnfairLock(initialState: (ema: 0.0, published: Date.distantPast))
@@ -170,6 +173,28 @@ final class Controller {
         core.confine(display: UInt32.max, edges: arrangement.side.opposite.mask)
     }
 
+    /// Core thread: the link came back after a stall took control of the peer away. Takes it
+    /// again the way it was taken, unless this Mac is doing something else by now.
+    private func resumeControl(_ how: Entry) {
+        guard mode.withLock({ $0 }) == .local, core.isConnected else { return }
+        Log.info("link recovered: controlling the peer again")
+        controlPeer()
+        guard mode.withLock({ $0 }) == .controllingPeer else { return }
+        switch how {
+        case .hotkey:
+            break
+        case .edge:
+            guard let arrangement = arrangement() else { break }
+            entry.withLock { $0 = .edge }
+            core.confine(display: UInt32.max, edges: arrangement.side.opposite.mask)
+        case .viewer:
+            entry.withLock { $0 = .viewer }
+            DispatchQueue.main.async {
+                self.core.confine(display: self.viewer.selectedDisplay, edges: Edge.all)
+            }
+        }
+    }
+
     func stopViewing() {
         viewer.close()
     }
@@ -201,6 +226,7 @@ final class Controller {
     }
 
     func toggle() {
+        resumeAfterStall.withLock { $0 = nil }
         let current = mode.withLock { $0 }
         Log.info("switch requested: mode=\(current) connected=\(core.isConnected)")
         switch current {
@@ -287,6 +313,7 @@ final class Controller {
             if !Permissions.accessibility {
                 Log.warn("Accessibility not granted: macOS drops the peer's input on this Mac")
             }
+            resumeAfterStall.withLock { $0 = nil }
             returnToLocal(notifyPeer: true)
             mode.withLock { $0 = .controlledByPeer }
             injector.begin()
@@ -394,12 +421,18 @@ final class Controller {
         case .path(let direct, _):
             DispatchQueue.main.async { self.state.direct = direct }
         case .stalled:
+            let how = mode.withLock { $0 } == .controllingPeer ? entry.withLock { $0 } : nil
             returnToLocal(notifyPeer: false)
+            resumeAfterStall.withLock { $0 = how }
             releaseControl()
             DispatchQueue.main.async { self.state.stalled = true }
         case .recovered:
+            if let how = resumeAfterStall.withLock({ r in defer { r = nil }; return r }) {
+                resumeControl(how)
+            }
             DispatchQueue.main.async { self.state.stalled = false }
         case .disconnected:
+            resumeAfterStall.withLock { $0 = nil }
             returnToLocal(notifyPeer: false)
             releaseControl()
             latency.withLock { $0.ema = 0 }
