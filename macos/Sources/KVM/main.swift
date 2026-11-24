@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = Self.makeMainMenu()
+        followWindowsForDockPresence()
         // Keep App Nap and timer coalescing away from the input path.
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
@@ -48,6 +50,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if Settings.peerID == nil || !controller.state.tapRunning {
             showSettings()
         }
+    }
+
+    /// A menu-bar app (.accessory) is left out of ⌘-Tab and the Dock. While one of our
+    /// windows (the screen viewer, Settings) is open, act as a regular app so it can be
+    /// switched to like any other; go back to the menu bar once they are all closed.
+    private func followWindowsForDockPresence() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            guard let window = note.object as? NSWindow, window.styleMask.contains(.titled),
+                  NSApp.activationPolicy() != .regular else { return }
+            NSApp.setActivationPolicy(.regular)
+        }
+        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            let closing = note.object as? NSWindow
+            // The closing window is still listed as visible; check once it is gone.
+            DispatchQueue.main.async {
+                let open = NSApp.windows.contains {
+                    $0 !== closing && $0.styleMask.contains(.titled) && ($0.isVisible || $0.isMiniaturized)
+                }
+                if !open, NSApp.activationPolicy() != .accessory {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
+    }
+
+    /// Shown while the app is regular (see `followWindowsForDockPresence`).
+    private static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Hide KVM", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit KVM", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let fullScreen = windowMenu.addItem(withTitle: "Enter Full Screen",
+                                            action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.control, .command]
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
+        return main
     }
 
     func applicationWillTerminate(_ notification: Notification) {
